@@ -19,8 +19,10 @@ mod issues;
 mod model;
 mod pdfium_build;
 mod process;
+mod read_diff;
 mod reference;
 mod regions;
+mod render;
 mod report_case;
 mod report_index;
 mod repro;
@@ -28,6 +30,7 @@ mod run;
 mod safe_render;
 mod signature;
 mod source_hints;
+mod stream_graph;
 mod trace_backend;
 mod worker;
 
@@ -99,6 +102,19 @@ enum Command {
         /// Compare against reference images in `<dir>/<case dir>/pN-ref.png` instead.
         #[arg(long, conflicts_with = "reference")]
         reference_images: Option<PathBuf>,
+        /// Only read each document and count its pages with Safe-PDF and the reference;
+        /// render and compare no page.
+        #[arg(long, conflicts_with = "page")]
+        read_only: bool,
+    },
+    /// Compare the read outcomes of the last run with an earlier run's `reads.json` and write
+    /// `read-diff.md` and `read-diff.json` next to the last run.
+    ReadDiff {
+        #[arg(long, value_enum)]
+        corpus: CorpusKind,
+        /// `reads.json` of the run to compare against, usually the base branch's.
+        #[arg(long)]
+        base: PathBuf,
     },
     /// Build PDFium from official sources for the `pdfium` reference (large, one-time).
     SetupPdfium,
@@ -122,6 +138,9 @@ enum Command {
     Repro(repro::ReproArgs),
     /// Like `repro`, but exits non-zero while any case still fails with the issue's signature.
     Verify(repro::ReproArgs),
+    /// Render one page of a local PDF with Safe-PDF, timing each step, and compare it with a
+    /// reference image or PDFium when one is available. Exits non-zero when the page fails.
+    Render(render::RenderArgs),
     /// Print the summary of a case from the last run.
     Show {
         #[arg(long, value_enum)]
@@ -172,6 +191,8 @@ enum WorkerCommand {
         out_dir: PathBuf,
         #[arg(long)]
         reference_images: Option<PathBuf>,
+        #[arg(long)]
+        write_safe: bool,
     },
 }
 
@@ -210,6 +231,7 @@ fn main() -> Result<ExitCode> {
             reference,
             pdfium,
             reference_images,
+            read_only,
         } => {
             if !(scale.is_finite() && scale > 0.0) {
                 bail!("--scale must be positive");
@@ -245,6 +267,7 @@ fn main() -> Result<ExitCode> {
                 tolerance,
                 pdfium,
                 reference_images: reference_images.map(std::path::absolute).transpose()?,
+                read_only,
             };
             if run::run(&options)? {
                 return Ok(ExitCode::FAILURE);
@@ -263,6 +286,7 @@ fn main() -> Result<ExitCode> {
                 ),
             }
         }
+        Command::ReadDiff { corpus, base } => read_diff::run(corpus, &base)?,
         Command::Accept { corpus, case } => accept(corpus, case.as_deref())?,
         Command::SetupPdfium => pdfium_build::run()?,
         Command::Issues {
@@ -278,6 +302,11 @@ fn main() -> Result<ExitCode> {
         })?,
         Command::Repro(args) => {
             repro::run(&args)?;
+        }
+        Command::Render(args) => {
+            if !render::run(&args)? {
+                return Ok(ExitCode::FAILURE);
+            }
         }
         Command::Verify(args) => {
             if !repro::run(&args)? {
@@ -305,6 +334,7 @@ fn main() -> Result<ExitCode> {
             tolerance,
             out_dir,
             reference_images,
+            write_safe,
         }) => worker::page(&worker::PageJob {
             pdf: &pdf,
             password: password.as_deref(),
@@ -315,6 +345,7 @@ fn main() -> Result<ExitCode> {
             out_dir: &out_dir,
             pdfium: pdfium.as_deref(),
             reference_images: reference_images.as_deref(),
+            write_safe,
         })?,
     }
     Ok(ExitCode::SUCCESS)
