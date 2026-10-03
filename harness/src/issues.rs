@@ -9,7 +9,6 @@
 //! - closed as not planned: leave it alone.
 //!
 //! Open issues whose cluster is absent from two full runs in a row are closed as completed.
-//! Read-only runs file and refresh issues but never count a cluster as absent.
 
 use crate::{
     baseline::Delta,
@@ -251,7 +250,7 @@ pub fn run(options: &IssueOptions<'_>) -> Result<()> {
             .collect(),
         complete: runs
             .iter()
-            .filter(|run| !run.index.filtered && !run.index.read_only)
+            .filter(|run| !run.index.filtered)
             .map(|run| run.kind.as_str().to_owned())
             .collect(),
         claimed: BTreeSet::new(),
@@ -382,12 +381,7 @@ impl Sync<'_> {
     /// Counts open issues whose cluster is absent from this run, closing those absent from
     /// enough consecutive full runs.
     fn absent(&mut self, runs: &[CorpusRun]) {
-        // A read-only run compares no page, so it cannot tell that any failure went away.
-        let corpora: BTreeSet<&str> = runs
-            .iter()
-            .filter(|run| !run.index.read_only)
-            .map(|run| run.kind.as_str())
-            .collect();
+        let corpora: BTreeSet<&str> = runs.iter().map(|run| run.kind.as_str()).collect();
         let absent: Vec<(Issue, IssueState)> = self
             .existing
             .iter()
@@ -643,7 +637,6 @@ mod tests {
                 scale: 1.5,
                 tolerance: 0.002,
                 filtered: false,
-                read_only: false,
                 totals: BTreeMap::new(),
                 page_totals: BTreeMap::new(),
                 clusters: vec![Cluster {

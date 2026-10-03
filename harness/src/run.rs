@@ -4,7 +4,7 @@ use crate::{
     baseline::Baseline,
     corpus::{self, CorpusKind},
     model::{Case, CaseResult, PageOutput, PageResult, ReadOutput, Status},
-    process, read_diff, report_case, report_index, signature,
+    process, report_case, report_index, signature,
 };
 use anyhow::{Result, anyhow};
 use md5::{Digest as _, Md5};
@@ -51,8 +51,6 @@ pub struct RunOptions {
     /// Directory of published reference images, one `<case dir>/pN-ref.png` per page;
     /// `None` with no PDFium uses the corpus's golden images.
     pub reference_images: Option<PathBuf>,
-    /// Only read each document and count its pages; no page is rendered or compared.
-    pub read_only: bool,
 }
 
 impl RunOptions {
@@ -75,9 +73,6 @@ impl RunOptions {
             args.extend(["--root".to_owned(), self.root.display().to_string()]);
         }
         args.extend(["--case".to_owned(), case.to_owned()]);
-        if self.read_only {
-            args.push("--read-only".to_owned());
-        }
         if let Some(page) = page {
             args.extend(["--page".to_owned(), page.to_string()]);
         }
@@ -147,8 +142,6 @@ pub fn run(options: &RunOptions) -> Result<bool> {
     }
     report_index::write(&out, &index)?;
     fs::write(out.join("results.json"), serde_json::to_vec(&results)?)?;
-    read_diff::Reads::from_results(options.kind, &results)
-        .save(&out.join(read_diff::READS_FILE))?;
     let regressions = index.regressions();
     println!(
         "\n{}\nReport: {}\nTriage: {}",
@@ -241,13 +234,6 @@ fn run_case(options: &RunOptions, out: &Path, case: &Case) -> Result<CaseResult>
     if let Some(error) = &read.safe_error {
         result.status = Status::ReadError;
         result.signature = Some(signature::error(Status::ReadError, error));
-    }
-    if options.read_only {
-        if result.status != Status::ReadError {
-            result.status = Status::Pass;
-        }
-        result.read = Some(read);
-        return Ok(result);
     }
     let pages = selected_pages(options, case, &read);
     let non_embedded_fonts = !read.inventory.non_embedded_fonts.is_empty();
