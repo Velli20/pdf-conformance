@@ -202,8 +202,6 @@ pub fn process(status: Status, evidence: &ProcessEvidence) -> String {
             status.as_str(),
             if evidence.timed_out {
                 "time limit exceeded"
-            } else if evidence.memory_exceeded {
-                "memory limit exceeded"
             } else {
                 evidence.exit_status.as_str()
             }

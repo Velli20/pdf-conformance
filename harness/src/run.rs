@@ -17,6 +17,7 @@ use std::{
         atomic::{AtomicUsize, Ordering},
     },
     thread,
+    time::Duration,
 };
 
 /// Settings of a corpus run.
@@ -41,8 +42,8 @@ pub struct RunOptions {
     pub max_side: u32,
     /// Pages checked per document.
     pub max_pages: usize,
-    /// Worker time and memory limits.
-    pub limits: process::Limits,
+    /// Worker time limit.
+    pub timeout: Duration,
     /// Mismatch fraction treated as a pass.
     pub tolerance: f64,
     /// PDFium shared library; `None` uses reference images from files.
@@ -225,7 +226,7 @@ fn run_case(options: &RunOptions, out: &Path, case: &Case) -> Result<CaseResult>
     if let Some(password) = &case.password {
         command.arg("--password").arg(password);
     }
-    let (read, evidence) = process::execute::<ReadOutput>(command, options.limits)?;
+    let (read, evidence) = process::execute::<ReadOutput>(command, options.timeout)?;
     let Some(read) = read else {
         result.status = if evidence.timed_out {
             Status::Timeout
@@ -346,7 +347,7 @@ fn run_page(
     if let Some(password) = &case.password {
         command.arg("--password").arg(password);
     }
-    let (output, process) = process::execute::<PageOutput>(command, options.limits)?;
+    let (output, process) = process::execute::<PageOutput>(command, options.timeout)?;
     let (status, signature) = match &output {
         None => {
             let status = if process.timed_out {

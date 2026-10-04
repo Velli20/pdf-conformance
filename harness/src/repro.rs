@@ -13,7 +13,6 @@ use crate::{
     corpus::{self, CorpusKind},
     fetch, github, issue_body, issue_state,
     model::Status,
-    process::{DEFAULT_MEMORY_LIMIT_MIB, Limits},
     report_index::Index,
     run::{self, RunOptions},
 };
@@ -318,7 +317,7 @@ fn rerun(args: &ReproArgs, repo: &str, selection: &Selection) -> Result<bool> {
         scale: selection.scale,
         max_side: 3000,
         max_pages: 10,
-        limits: Limits::new(Duration::from_secs(60), DEFAULT_MEMORY_LIMIT_MIB),
+        timeout: Duration::from_secs(60),
         tolerance: selection.tolerance,
         pdfium: None,
         // Without published images, the pdfium corpus falls back to its golden images and
