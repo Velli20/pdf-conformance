@@ -221,10 +221,7 @@ jobs:
         if: env.MODE == 'main' && steps.setup.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target/regression
+          path: ${{ steps.setup.outputs.cache-paths }}
           key: ${{ steps.setup.outputs.cache-primary-key }}
 
       - name: Job summary
@@ -461,13 +458,7 @@ jobs:
         if: always() && steps.setup.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            ~/.cargo/bin/wasm-bindgen
-            target/regression
-            safe-pdf/target/release
-            safe-pdf/target/wasm32-unknown-unknown
+          path: ${{ steps.setup.outputs.cache-paths }}
           key: ${{ steps.setup.outputs.cache-primary-key }}
 
       - name: Job summary
@@ -558,6 +549,25 @@ jobs:
             exit 0
           fi
           cargo conformance issues "${args[@]}" --max-new 15
+
+  # Each Safe-PDF dependency change saves new cargo caches next to the old ones. Keeps the
+  # newest of each; runs nothing from Safe-PDF, so only this job may delete caches.
+  prune-caches:
+    name: Prune old cargo caches
+    needs: [ target, reads, conformance ]
+    if: always() && needs.target.outputs.mode == 'main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Prune
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: .github/scripts/prune-cargo-cache.sh Linux-conformance- Linux-conformance-skia- Linux-conformance-web-
 
   publish:
     name: Publish reports to GitHub Pages
