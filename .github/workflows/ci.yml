@@ -45,9 +45,10 @@ jobs:
       - name: Shell scripts
         run: for script in .github/scripts/*.sh; do bash -n "$script"; done
 
-      # Only main saves, so a pull request never writes a cache other branches restore.
+      # Only main saves, so a pull request never writes a cache other branches restore. A
+      # failing lint or test still saves, so a cold build is not thrown away.
       - name: Save cargo cache
-        if: github.event_name == 'push' && steps.setup.outputs.cache-hit != 'true'
+        if: ${{ !cancelled() && github.event_name == 'push' && steps.setup.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@v4
         with:
           path: ${{ steps.setup.outputs.cache-paths }}

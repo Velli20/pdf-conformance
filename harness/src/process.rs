@@ -216,9 +216,13 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn kills_a_worker_over_the_memory_limit() {
-        // `tail` buffers the newline-free /dev/zero without bound.
-        let mut command = Command::new("tail");
-        command.arg("/dev/zero");
+        // Holds about 256 MiB in a shell variable, then waits; bounded even if the limit
+        // check misses it.
+        let mut command = Command::new("sh");
+        command.args([
+            "-c",
+            "x=$(head -c 268435456 /dev/zero | tr '\\0' x); sleep 30",
+        ]);
         let limits = Limits::new(Duration::from_secs(30), 64);
         let (_, stop) = limited_output(command, limits).unwrap();
         assert_eq!(stop, Stop::OutOfMemory);
