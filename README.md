@@ -192,8 +192,7 @@ PDFium build, so it also works in cloud sessions. Results land in
 `safe-pdf/` and the published reports from this repository's `origin`; pass `--repo owner/name`
 or `--pages-repo owner/name` otherwise.
 
-The pdf.js corpus is only read on `main`, so it has no published report. For such an issue,
-`repro` takes the cases from the issue's machine-readable summary (through `gh`) and reruns
+When the published reports do not hold an issue's cases, `repro` takes the cases from the issue's machine-readable summary (through `gh`) and reruns
 them without reference images. That still shows whether a crash, timeout or error is gone, and
 `render` gives the image to compare by eye.
 
@@ -304,14 +303,16 @@ PDFs that have no goldens.
   pull request and updates it on later pushes (also once nothing differs any more). The
   `conformance/reads` commit status shows the run on the pull request. Pull requests are never
   failed.
-- **Rendering (`main` commits):** the `pdfkit` job renders the PDFium corpus with PDFKit on
-  macOS. The `conformance` job then renders the corpus with the Skia and web renderers,
-  compares every page with PDFium and draws failing pages with pdf.js and the PDFKit renders.
-  Reports are uploaded as `conformance-<report>` artifacts with a job summary. The pdf.js
-  corpus is not rendered.
+- **Rendering (`main` commits):** the `pdfkit` job renders the first pages of both corpora with
+  PDFKit on macOS. The `conformance` job then renders both corpora with the Skia and web
+  renderers, compares every page with PDFium and draws failing pages with pdf.js and the PDFKit
+  renders. PDFKit only draws the first 10 pages and opens no password-protected document, so
+  pdf.js cases past page 10 or with a password show no WebKit render. Reports are uploaded as
+  `conformance-<report>` artifacts with a job summary.
 - **Issues (`main` commits):** `cargo conformance issues --corpus pdfium --corpus pdfjs
-  --corpus pdfium-web` files, updates and closes issues in Safe-PDF (`--repo`, or
-  `CONFORMANCE_ISSUES_REPO`).
+  --corpus pdfium-web --corpus pdfjs-web` files, updates and closes issues in Safe-PDF
+  (`--repo`, or `CONFORMANCE_ISSUES_REPO`). When the pdf.js corpus was not rendered, its
+  read-only report (`reads-pdfjs`) is used in its place.
 - **Published viewer:** runs on `main` commits deploy the viewers to this repository's GitHub
   Pages, <https://velli20.github.io/pdf-conformance/>. Issues link straight into it
   (`#case=<id>&page=<n>`) and embed its images.
@@ -343,7 +344,7 @@ PDFs that have no goldens.
     - **Closed as not planned:** never touched again.
   - Issues without that comment (including those filed before it existed) are ignored.
   - Runs limited with `--filter`, `--case` or `--page` never close issues. Read-only runs
-    (the pdf.js corpus) file and refresh issues but never count a failure as absent, so they
+    (the pdf.js reads, when its render is missing) file and refresh issues but never count a failure as absent, so they
     do not close issues either.
   - Preview locally with `cargo conformance issues --corpus pdfium --corpus pdfjs --repo
     owner/name --pages-repo owner/name --dry-run`. Bodies are written to

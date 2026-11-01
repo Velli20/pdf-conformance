@@ -11,7 +11,7 @@ name: Conformance
 #   `status-*` set a `conformance/reads` commit status. Pull requests are never failed.
 # - `safe-pdf-main` (payload: sha), pushes to this repository, the nightly schedule and manual
 #   runs check a commit of Safe-PDF's main branch: the reads, plus `conformance`, which renders
-#   the PDFium corpus with the Skia and web renderers. `issues` then files, updates and closes
+#   both corpora with the Skia and web renderers. `issues` then files, updates and closes
 #   issues in Safe-PDF, and `publish` puts the viewers on this repository's GitHub Pages.
 #
 # Pull request runs build code from the pull request, possibly from a fork. They get no
@@ -354,23 +354,32 @@ jobs:
             .github/scripts/set-status.sh error "The read jobs did not finish ($READS)"
           fi
 
-  # Renders the selected pages of the PDFium corpus with PDFKit on macOS, once without and once
-  # with annotations, matching the two renderers' references.
+  # Renders the first pages of both corpora with PDFKit on macOS, once without and once with
+  # annotations, matching the two renderers' references. Each report finds its renders under
+  # webkit/<report>/.
   pdfkit:
     name: WebKit renders
     needs: [ target, corpus ]
     if: needs.target.outputs.mode == 'main'
     runs-on: macos-latest
-    timeout-minutes: 60
+    timeout-minutes: 120
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Restore corpus
+      - name: Restore PDFium corpus
         uses: actions/cache/restore@v4
         with:
           path: target/conformance/corpora/pdfium
           key: conformance-corpus-pdfium-${{ hashFiles('harness/src/corpus.rs') }}
+          enableCrossOsArchive: true
+          fail-on-cache-miss: true
+
+      - name: Restore pdf.js corpus
+        uses: actions/cache/restore@v4
+        with:
+          path: target/conformance/corpora/pdfjs
+          key: conformance-corpus-pdfjs-${{ hashFiles('harness/src/corpus.rs') }}
           enableCrossOsArchive: true
           fail-on-cache-miss: true
 
@@ -379,9 +388,11 @@ jobs:
 
       - name: Render
         run: |
-          corpus=target/conformance/corpora/pdfium
-          "$RUNNER_TEMP/pdfkit-render" --corpus "$corpus" --out webkit/pdfium
-          "$RUNNER_TEMP/pdfkit-render" --corpus "$corpus" --out webkit/pdfium-web --annotations
+          for corpus in pdfium pdfjs; do
+            root="target/conformance/corpora/$corpus"
+            "$RUNNER_TEMP/pdfkit-render" --corpus "$root" --out "webkit/$corpus"
+            "$RUNNER_TEMP/pdfkit-render" --corpus "$root" --out "webkit/$corpus-web" --annotations
+          done
 
       - name: Upload renders
         uses: actions/upload-artifact@v4
@@ -392,7 +403,7 @@ jobs:
           compression-level: 1
 
   conformance:
-    name: Conformance (pdfium, ${{ matrix.renderer }})
+    name: Conformance (${{ matrix.corpus }}, ${{ matrix.renderer }})
     needs: [ target, corpus, pdfkit ]
     if: always() && needs.target.outputs.mode == 'main' && needs.corpus.result == 'success'
     runs-on: ubuntu-latest
@@ -400,10 +411,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        corpus: [ pdfium, pdfjs ]
         renderer: [ skia, web ]
     env:
       # Report name: target/conformance/<report>/, baselines/<report>.json, Pages path.
-      REPORT: pdfium${{ matrix.renderer == 'web' && '-web' || '' }}
+      REPORT: ${{ matrix.corpus }}${{ matrix.renderer == 'web' && '-web' || '' }}
       # Chrome's sandbox cannot start on the runner.
       CONFORMANCE_CHROME_NO_SANDBOX: "1"
     steps:
@@ -422,8 +434,8 @@ jobs:
       - name: Restore corpus
         uses: actions/cache/restore@v4
         with:
-          path: target/conformance/corpora/pdfium
-          key: conformance-corpus-pdfium-${{ hashFiles('harness/src/corpus.rs') }}
+          path: target/conformance/corpora/${{ matrix.corpus }}
+          key: conformance-corpus-${{ matrix.corpus }}-${{ hashFiles('harness/src/corpus.rs') }}
           enableCrossOsArchive: true
           fail-on-cache-miss: true
 
@@ -450,15 +462,16 @@ jobs:
             echo "::warning ::No WebKit renders in this run; failing pages are shown without them."
           fi
           set +e
-          cargo conformance run --corpus pdfium --renderer ${{ matrix.renderer }} --reference pdfium --jobs 4 "${webkit[@]}"
+          cargo conformance run --corpus ${{ matrix.corpus }} --renderer ${{ matrix.renderer }} --reference pdfium --jobs 4 "${webkit[@]}"
           status=$?
           echo "status=$status" >> "$GITHUB_OUTPUT"
           if [ "$status" != 0 ]; then
             echo "::warning ::Conformance regressions against harness/baselines/${REPORT}.json; see the job summary and the conformance-${REPORT} artifact."
           fi
 
+      # Both corpora build the same harness; only one leg saves the cache they share.
       - name: Save cargo cache
-        if: always() && steps.setup.outputs.cache-hit != 'true'
+        if: always() && matrix.corpus == 'pdfium' && steps.setup.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: |
@@ -485,7 +498,7 @@ jobs:
 
       - name: Record baseline
         if: github.event_name == 'workflow_dispatch' && inputs.accept
-        run: cargo conformance accept --corpus pdfium --renderer ${{ matrix.renderer }}
+        run: cargo conformance accept --corpus ${{ matrix.corpus }} --renderer ${{ matrix.renderer }}
 
       - name: Upload baseline
         if: github.event_name == 'workflow_dispatch' && inputs.accept
@@ -501,8 +514,9 @@ jobs:
           exit 1
 
   # Both corpora are reported together, so one cause found in both is one issue, and an issue
-  # is only closed when every corpus it was seen in no longer has it. The pdf.js report is a
-  # read-only run, which files and refreshes issues but never closes them.
+  # is only closed when every corpus it was seen in no longer has it. When the pdf.js corpus was
+  # not rendered, its read-only report stands in: it files and refreshes issues but never
+  # closes them.
   issues:
     name: File Safe-PDF issues
     needs: [ target, conformance, reads ]
@@ -541,9 +555,11 @@ jobs:
           CONFORMANCE_ISSUES_REPO: ${{ env.SAFE_PDF_REPOSITORY }}
         run: |
           args=()
-          # The PDFium corpus is rendered by both renderers; the pdf.js corpus is only read.
-          for report in conformance-pdfium reads-pdfjs conformance-pdfium-web; do
+          for report in conformance-pdfium conformance-pdfjs conformance-pdfium-web conformance-pdfjs-web; do
             corpus=${report#*-}
+            if [ "$report" = conformance-pdfjs ] && [ ! -f "reports/$report/index.json" ]; then
+              report=reads-pdfjs
+            fi
             if [ -f "reports/$report/index.json" ]; then
               mkdir -p target/conformance
               rm -rf "target/conformance/$corpus"
