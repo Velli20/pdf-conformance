@@ -3,25 +3,25 @@ name = "pdf-conformance"
 version = "0.1.0"
 edition = "2024"
 publish = false
-description = "Render PDF test corpora with Safe-PDF and PDFium and report differences"
+description = "Render PDF test corpora with Safe-PDF, PDFium, pdf.js and WebKit and report differences"
 
 [lints]
 workspace = true
 
 [dependencies]
 bytes = "1.10.1"
-pdf-annotation-core = { path = "../../crates/pdf-annotation-core" }
-pdf-canvas = { path = "../../crates/pdf-canvas" }
-pdf-document = { path = "../../crates/pdf-document", features = ["error-backtrace"] }
-pdf-font = { path = "../../crates/pdf-font" }
-pdf-graphics = { path = "../../crates/pdf-graphics" }
-pdf-graphics-skia = { path = "../../crates/pdf-graphics-skia" }
-pdf-object-collection = { path = "../../crates/pdf-object-collection" }
-pdf-object-reader = { path = "../../crates/pdf-object-reader" }
-pdf-shading = { path = "../../crates/pdf-shading" }
-pdf-renderer = { path = "../../crates/pdf-renderer", features = ["error-backtrace"] }
-pdf-resources = { path = "../../crates/pdf-resources" }
-pdf-utils = { path = "../../crates/pdf-utils", features = ["error-backtrace"] }
+pdf-annotation-core = { path = "../safe-pdf/crates/pdf-annotation-core" }
+pdf-canvas = { path = "../safe-pdf/crates/pdf-canvas" }
+pdf-document = { path = "../safe-pdf/crates/pdf-document", features = ["error-backtrace"] }
+pdf-font = { path = "../safe-pdf/crates/pdf-font" }
+pdf-graphics = { path = "../safe-pdf/crates/pdf-graphics" }
+pdf-graphics-skia = { path = "../safe-pdf/crates/pdf-graphics-skia" }
+pdf-object-collection = { path = "../safe-pdf/crates/pdf-object-collection" }
+pdf-object-reader = { path = "../safe-pdf/crates/pdf-object-reader" }
+pdf-shading = { path = "../safe-pdf/crates/pdf-shading" }
+pdf-renderer = { path = "../safe-pdf/crates/pdf-renderer", features = ["error-backtrace"] }
+pdf-resources = { path = "../safe-pdf/crates/pdf-resources" }
+pdf-utils = { path = "../safe-pdf/crates/pdf-utils", features = ["error-backtrace"] }
 anyhow = "1"
 base64 = "0.22"
 clap = { version = "4", features = ["derive", "env"] }

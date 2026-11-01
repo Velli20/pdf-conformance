@@ -1,0 +1,6 @@
+# The Safe-PDF checkout under test: CI checks it out here, locally it is a symlink.
+/safe-pdf
+/target/
+/pdfjs/node_modules/
+*.DS_Store
+**/*.rs.bk

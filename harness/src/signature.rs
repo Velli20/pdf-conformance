@@ -185,7 +185,12 @@ pub fn panic_message(stderr: &str) -> Option<(String, String)> {
     let mut lines = stderr.lines();
     while let Some(line) = lines.next() {
         if let Some(rest) = line.split_once("panicked at ").map(|(_, rest)| rest) {
-            let location = rest.trim_end_matches(':').to_owned();
+            let location = rest.trim_end_matches(':');
+            let location = location
+                .find("/crates/")
+                .and_then(|start| location.get(start.saturating_add(1)..))
+                .unwrap_or(location)
+                .to_owned();
             let message = lines.next().unwrap_or_default().trim().to_owned();
             return Some((location, message));
         }

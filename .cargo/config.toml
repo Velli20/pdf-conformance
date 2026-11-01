@@ -1,0 +1,2 @@
+[alias]
+conformance = "run --package pdf-conformance --profile regression --"

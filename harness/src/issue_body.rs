@@ -7,7 +7,8 @@
 
 use crate::{
     baseline::Delta,
-    corpus::{CorpusKind, Target},
+    corpus::{self, CorpusKind, Target},
+    fetch,
     issue_state::IssueState,
     issues::{Group, Part},
     model::{CaseResult, ErrorDetail, PageOutput, ProcessEvidence, Status},
@@ -33,17 +34,20 @@ const STDERR_LINES: usize = 25;
 
 /// Where the issue's links point.
 pub struct BodyContext {
-    /// `owner/name` of the repository.
+    /// `owner/name` of the Safe-PDF repository the issues are filed in.
     pub repo: String,
+    /// `owner/name` of the conformance repository, which publishes the reports.
+    pub pages_repo: String,
     /// Link to the workflow run that produced the data.
     pub run_link: Option<String>,
-    /// Commit the run checked, for source permalinks.
+    /// Safe-PDF commit the run checked, for source permalinks.
     pub sha: Option<String>,
 }
 
 impl BodyContext {
-    /// Reads the run link and commit from the GitHub Actions environment.
-    pub fn from_env(repo: &str) -> Self {
+    /// Reads the run link from the GitHub Actions environment and the commit from the
+    /// Safe-PDF checkout.
+    pub fn from_env(repo: &str, pages_repo: &str) -> Self {
         let run_link = (|| {
             let server = std::env::var("GITHUB_SERVER_URL").ok()?;
             let repository = std::env::var("GITHUB_REPOSITORY").ok()?;
@@ -52,8 +56,9 @@ impl BodyContext {
         })();
         Self {
             repo: repo.to_owned(),
+            pages_repo: pages_repo.to_owned(),
             run_link,
-            sha: std::env::var("GITHUB_SHA").ok(),
+            sha: fetch::revision(&corpus::safe_pdf_root()),
         }
     }
 
@@ -67,7 +72,7 @@ impl BodyContext {
 
     /// Returns the published report of a corpus on GitHub Pages, ending in `/`.
     pub fn pages(&self, kind: Target) -> String {
-        pages_url(&self.repo, kind)
+        pages_url(&self.pages_repo, kind)
     }
 
     fn source(&self, path: &str, line: usize) -> String {
@@ -79,11 +84,11 @@ impl BodyContext {
     }
 }
 
-/// Returns the published report of a corpus for a repository, ending in `/`.
-pub fn pages_url(repo: &str, kind: Target) -> String {
-    let (owner, name) = repo.split_once('/').unwrap_or((repo, ""));
+/// Returns the published report of a corpus for the conformance repository, ending in `/`.
+pub fn pages_url(pages_repo: &str, kind: Target) -> String {
+    let (owner, name) = pages_repo.split_once('/').unwrap_or((pages_repo, ""));
     format!(
-        "https://{}.github.io/{name}/conformance/{}/",
+        "https://{}.github.io/{name}/{}/",
         owner.to_lowercase(),
         kind.as_str()
     )
@@ -370,13 +375,13 @@ fn render_with(
         example(&mut text, entry, group, context)?;
     }
     cases(&mut text, &entries, context, limit)?;
-    reproduce(&mut text, group)?;
+    reproduce(&mut text, group, context)?;
     agents(&mut text, group, &entries, suspect.as_ref(), context, limit)?;
     writeln!(
         text,
         "---\n<sub>Filed by the conformance workflow. Key `{}`. Close as *not planned* to stop updates. \
-         How to read the images and the workflow: [tools/conformance/README.md](https://github.com/{}/blob/main/tools/conformance/README.md).</sub>",
-        group.key, context.repo
+         How to read the images and the workflow: [README.md](https://github.com/{}/blob/main/README.md).</sub>",
+        group.key, context.pages_repo
     )?;
     Ok(text)
 }
@@ -806,11 +811,12 @@ fn cases(
     Ok(())
 }
 
-fn reproduce(text: &mut String, group: &Group<'_>) -> Result<()> {
+fn reproduce(text: &mut String, group: &Group<'_>, context: &BodyContext) -> Result<()> {
     writeln!(
         text,
-        "### Reproduce\n\n> [!TIP]\n> Downloads only these PDFs and compares against the published PDFium images, so no local PDFium build is needed. For a corpus that is only read on `main`, it reruns the cases listed below without reference images, which still shows crashes, timeouts and errors:\n>\n> ```console\n> cargo conformance repro {}\n> ```\n>\n> `cargo conformance render <pdf> --page <n>` renders one downloaded PDF and times each Safe-PDF step.\n",
-        group.key
+        "### Reproduce\n\nIn a checkout of [{pages}](https://github.com/{pages}) whose `safe-pdf` links to your Safe-PDF checkout (`ln -s <safe-pdf> safe-pdf`):\n\n> [!TIP]\n> Downloads only these PDFs and compares against the published PDFium images, so no local PDFium build is needed. For a corpus that is only read on `main`, it reruns the cases listed below without reference images, which still shows crashes, timeouts and errors:\n>\n> ```console\n> cargo conformance repro {}\n> ```\n>\n> `cargo conformance render <pdf> --page <n>` renders one downloaded PDF and times each Safe-PDF step.\n",
+        group.key,
+        pages = context.pages_repo
     )?;
     writeln!(
         text,
@@ -975,6 +981,7 @@ mod tests {
         let group = groups.first().unwrap();
         let context = BodyContext {
             repo: "Velli20/safe-pdf".to_owned(),
+            pages_repo: "Velli20/pdf-conformance".to_owned(),
             run_link: Some("https://github.com/Velli20/safe-pdf/actions/runs/1".to_owned()),
             sha: Some("0123456789abcdef".to_owned()),
         };
@@ -997,7 +1004,7 @@ mod tests {
         assert_eq!(IssueState::parse(&body), Some(state));
         assert!(body.contains("> [!WARNING]\n> Safe-PDF fails to render 1 page in 1 document."));
         assert!(body.contains(
-            "<img src=\"https://velli20.github.io/safe-pdf/conformance/pdfjs/cases/clippath-1234abcd/p0-ref.png\""
+            "<img src=\"https://velli20.github.io/pdf-conformance/pdfjs/cases/clippath-1234abcd/p0-ref.png\""
         ));
         assert!(body.contains(
             "[PDF](https://github.com/mozilla/pdf.js/blob/abc123/test/pdfs/clippath.pdf)"
@@ -1031,16 +1038,16 @@ mod tests {
     #[test]
     fn links_into_pages() {
         let base = pages_url(
-            "Velli20/safe-pdf",
+            "Velli20/pdf-conformance",
             Target::new(CorpusKind::Pdfjs, Renderer::Skia),
         );
         assert_eq!(
             base,
-            "https://velli20.github.io/safe-pdf/conformance/pdfjs/"
+            "https://velli20.github.io/pdf-conformance/pdfjs/"
         );
         assert_eq!(
             viewer_link(&base, "issue 1#2", Some(3)),
-            "https://velli20.github.io/safe-pdf/conformance/pdfjs/#case=issue%201%232&page=3"
+            "https://velli20.github.io/pdf-conformance/pdfjs/#case=issue%201%232&page=3"
         );
     }
 

@@ -207,7 +207,7 @@ fn find_chrome(explicit: Option<PathBuf>) -> Result<PathBuf> {
 
 /// Builds the optimized `web-canvas` package and returns its directory.
 fn build_package() -> Result<PathBuf> {
-    let root = corpus::workspace_root();
+    let root = corpus::safe_pdf_root();
     println!("Building the web-canvas WebAssembly package");
     let status = Command::new(env::var_os("CARGO").unwrap_or_else(|| "cargo".into()))
         .current_dir(&root)

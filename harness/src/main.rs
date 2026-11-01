@@ -1,7 +1,7 @@
 //! Renders PDF test corpora with Safe-PDF, compares them with PDFium, and writes evidence for
 //! fixing differences.
 //!
-//! See `tools/conformance/README.md`.
+//! See `README.md` in the repository root.
 
 mod annotation_areas;
 mod attribution;
@@ -141,9 +141,12 @@ enum Command {
         /// repeat the flag.
         #[arg(long, value_enum, required = true)]
         corpus: Vec<Target>,
-        /// Repository as owner/name.
-        #[arg(long, env = "GITHUB_REPOSITORY")]
+        /// Safe-PDF repository the issues are filed in, as owner/name.
+        #[arg(long, env = "CONFORMANCE_ISSUES_REPO")]
         repo: String,
+        /// Conformance repository that publishes the reports, as owner/name.
+        #[arg(long, env = "GITHUB_REPOSITORY")]
+        pages_repo: String,
         /// Issues created at most per run; further clusters wait for later runs.
         #[arg(long, default_value_t = 15)]
         max_new: usize,
@@ -344,11 +347,13 @@ fn main() -> Result<ExitCode> {
         Command::Issues {
             corpus,
             repo,
+            pages_repo,
             max_new,
             dry_run,
         } => issues::run(&issues::IssueOptions {
             kinds: &corpus,
             repo: &repo,
+            pages_repo: &pages_repo,
             max_new,
             dry_run,
         })?,

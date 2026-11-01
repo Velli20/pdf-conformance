@@ -105,7 +105,7 @@ impl Reads {
     pub fn from_results(kind: Target, results: &[CaseResult]) -> Self {
         Self {
             corpus: kind.as_str().to_owned(),
-            commit: fetch::revision(&corpus::workspace_root()),
+            commit: fetch::revision(&corpus::safe_pdf_root()),
             cases: results
                 .iter()
                 .map(|result| (result.case.id.clone(), ReadEntry::from_result(result)))

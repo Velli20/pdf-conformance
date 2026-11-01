@@ -37,8 +37,10 @@ const CLOSE_AFTER_MISSING: u32 = 2;
 pub struct IssueOptions<'a> {
     /// Reports whose last runs are reported together.
     pub kinds: &'a [Target],
-    /// `owner/name` of the repository.
+    /// `owner/name` of the Safe-PDF repository the issues are filed in.
     pub repo: &'a str,
+    /// `owner/name` of the conformance repository, which publishes the reports.
+    pub pages_repo: &'a str,
     /// Issues created at most per run.
     pub max_new: usize,
     /// Print planned actions and write bodies to disk without calling GitHub.
@@ -244,7 +246,7 @@ pub fn run(options: &IssueOptions<'_>) -> Result<()> {
     };
     let mut sync = Sync {
         options,
-        context: BodyContext::from_env(options.repo),
+        context: BodyContext::from_env(options.repo, options.pages_repo),
         existing: existing
             .into_iter()
             .filter_map(|issue| IssueState::parse(&issue.body).map(|state| (issue, state)))
@@ -682,6 +684,7 @@ mod tests {
                 Target::new(CorpusKind::Pdfjs, Renderer::Skia),
             ],
             repo: "owner/repo",
+            pages_repo: "owner/conformance",
             max_new: 15,
             dry_run: true,
         };
@@ -695,6 +698,7 @@ mod tests {
             options: &options,
             context: BodyContext {
                 repo: "owner/repo".to_owned(),
+                pages_repo: "owner/conformance".to_owned(),
                 run_link: None,
                 sha: None,
             },

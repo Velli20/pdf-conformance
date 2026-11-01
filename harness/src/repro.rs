@@ -39,9 +39,14 @@ pub struct ReproArgs {
     /// Cases rerun at most per corpus.
     #[arg(long, default_value_t = 10)]
     pub max_cases: usize,
-    /// Repository whose GitHub Pages report is used, as owner/name (default: from `origin`).
-    #[arg(long, env = "GITHUB_REPOSITORY")]
+    /// Safe-PDF repository holding the issues, as owner/name (default: the `origin` of the
+    /// `safe-pdf` checkout).
+    #[arg(long, env = "CONFORMANCE_ISSUES_REPO")]
     pub repo: Option<String>,
+    /// Conformance repository whose GitHub Pages report is used, as owner/name (default: this
+    /// repository's `origin`).
+    #[arg(long, env = "GITHUB_REPOSITORY")]
+    pub pages_repo: Option<String>,
     /// Parallel workers.
     #[arg(short, long, default_value_t = 4)]
     pub jobs: usize,
@@ -90,7 +95,11 @@ struct IssueCase {
 pub fn run(args: &ReproArgs) -> Result<bool> {
     let repo = match &args.repo {
         Some(repo) => repo.clone(),
-        None => origin_repo()?,
+        None => origin_repo(&corpus::safe_pdf_root())?,
+    };
+    let pages_repo = match &args.pages_repo {
+        Some(repo) => repo.clone(),
+        None => origin_repo(&corpus::workspace_root())?,
     };
     let kinds = if args.corpus.is_empty() {
         Target::ALL.to_vec()
@@ -99,7 +108,7 @@ pub fn run(args: &ReproArgs) -> Result<bool> {
     };
     let mut selections = Vec::new();
     for kind in kinds {
-        let base = issue_body::pages_url(&repo, kind);
+        let base = issue_body::pages_url(&pages_repo, kind);
         let dir = work_dir(kind);
         fs::create_dir_all(&dir)?;
         let path = dir.join("published-index.json");
@@ -121,13 +130,13 @@ pub fn run(args: &ReproArgs) -> Result<bool> {
     }
     if selections.is_empty() {
         bail!(
-            "`{}` matches no failure cluster or case in the published reports of {repo}",
+            "`{}` matches no failure cluster or case in the published reports of {pages_repo}",
             args.target
         );
     }
     let mut fixed = true;
     for selection in &selections {
-        fixed &= rerun(args, &repo, selection)?;
+        fixed &= rerun(args, &pages_repo, selection)?;
     }
     println!(
         "\n{}",
@@ -268,7 +277,7 @@ fn revision_in(url: &str) -> Option<&str> {
         .filter(|revision| !revision.is_empty())
 }
 
-fn rerun(args: &ReproArgs, repo: &str, selection: &Selection) -> Result<bool> {
+fn rerun(args: &ReproArgs, pages_repo: &str, selection: &Selection) -> Result<bool> {
     let kind = selection.kind;
     println!(
         "{}: rerunning {}{}",
@@ -284,7 +293,7 @@ fn rerun(args: &ReproArgs, repo: &str, selection: &Selection) -> Result<bool> {
     let root = dir.join("corpus");
     checkout(kind.corpus, &root, &selection.revision, &selection.cases)?;
     let references = dir.join("references");
-    let base = issue_body::pages_url(repo, kind);
+    let base = issue_body::pages_url(pages_repo, kind);
     let published = selection
         .index
         .as_ref()
@@ -424,11 +433,11 @@ fn checkout(kind: CorpusKind, root: &Path, revision: &str, cases: &[String]) -> 
     }
 }
 
-/// Returns `owner/name` of the workspace's `origin` remote.
-fn origin_repo() -> Result<String> {
+/// Returns `owner/name` of the `origin` remote of the checkout at `root`.
+fn origin_repo(root: &Path) -> Result<String> {
     let output = Command::new("git")
         .arg("-C")
-        .arg(corpus::workspace_root())
+        .arg(root)
         .args(["remote", "get-url", "origin"])
         .output()?;
     let url = String::from_utf8_lossy(&output.stdout).trim().to_owned();

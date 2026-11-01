@@ -19,7 +19,7 @@ struct Template {
 fn templates() -> &'static [Template] {
     static TEMPLATES: OnceLock<Vec<Template>> = OnceLock::new();
     TEMPLATES.get_or_init(|| {
-        let root = corpus::workspace_root();
+        let root = corpus::safe_pdf_root();
         let mut templates = Vec::new();
         for entry in WalkDir::new(root.join("crates")).into_iter().flatten() {
             let path = entry.path();

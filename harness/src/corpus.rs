@@ -119,10 +119,16 @@ impl clap::ValueEnum for Target {
     }
 }
 
-/// Returns the workspace root, fixed at compile time.
+/// Returns the conformance repository's root, fixed at compile time.
 pub fn workspace_root() -> PathBuf {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
-    manifest.ancestors().nth(2).unwrap_or(manifest).to_owned()
+    manifest.parent().unwrap_or(manifest).to_owned()
+}
+
+/// Returns the Safe-PDF checkout under test: `safe-pdf/` in the repository root, whose crates
+/// the harness is built from.
+pub fn safe_pdf_root() -> PathBuf {
+    workspace_root().join("safe-pdf")
 }
 
 /// Returns the directory holding fetched corpora, PDFium, and run output.

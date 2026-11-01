@@ -1,0 +1,125 @@
+[workspace]
+resolver = "2"
+members = ["harness"]
+# The Safe-PDF checkout under test is its own workspace; the harness reaches its crates by path.
+exclude = ["safe-pdf"]
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+arithmetic_side_effects = "warn"
+or_fun_call = "warn"
+mut_mut = "warn"
+eq_op = "warn"
+absurd_extreme_comparisons = "warn"
+as_conversions = "warn"
+large_enum_variant = "deny"
+map_clone = "warn"
+unnecessary_to_owned = "warn"
+inefficient_to_string = "warn"
+clone_on_ref_ptr = "warn"
+cmp_owned = "warn"
+panic = "deny"
+indexing_slicing = "deny"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+# Symbolized diagnostic workers, including panic traces.
+[profile.regression]
+inherits = "dev"
+debug = 2
+strip = "none"
+panic = "unwind"
+
+# Optimize third-party code and the harness's own pixel loops.
+[profile.regression.package."*"]
+opt-level = 3
+
+[profile.regression.package.pdf-conformance]
+opt-level = 3
+
+# Safe-PDF crates are not members of this workspace, so "*" would optimize them. Keep them
+# unoptimized so backtraces show every Safe-PDF frame. The JPEG 2000 codec stays optimized:
+# reading a document decodes every image it uses.
+
+[profile.regression.package.pdf-annotation-core]
+opt-level = 0
+
+[profile.regression.package.pdf-canvas]
+opt-level = 0
+
+[profile.regression.package.pdf-ccitt]
+opt-level = 0
+
+[profile.regression.package.pdf-cmap]
+opt-level = 0
+
+[profile.regression.package.pdf-color-space]
+opt-level = 0
+
+[profile.regression.package.pdf-content-stream]
+opt-level = 0
+
+[profile.regression.package.pdf-content-stream-operators]
+opt-level = 0
+
+[profile.regression.package.pdf-decode]
+opt-level = 0
+
+[profile.regression.package.pdf-document]
+opt-level = 0
+
+[profile.regression.package.pdf-filter]
+opt-level = 0
+
+[profile.regression.package.pdf-font]
+opt-level = 0
+
+[profile.regression.package.pdf-function]
+opt-level = 0
+
+[profile.regression.package.pdf-graphics]
+opt-level = 0
+
+[profile.regression.package.pdf-graphics-skia]
+opt-level = 0
+
+[profile.regression.package.pdf-image]
+opt-level = 0
+
+[profile.regression.package.pdf-jbig2]
+opt-level = 0
+
+[profile.regression.package.pdf-object-collection]
+opt-level = 0
+
+[profile.regression.package.pdf-object-reader]
+opt-level = 0
+
+[profile.regression.package.pdf-optional-content]
+opt-level = 0
+
+[profile.regression.package.pdf-parser]
+opt-level = 0
+
+[profile.regression.package.pdf-postscript]
+opt-level = 0
+
+[profile.regression.package.pdf-renderer]
+opt-level = 0
+
+[profile.regression.package.pdf-resources]
+opt-level = 0
+
+[profile.regression.package.pdf-shading]
+opt-level = 0
+
+[profile.regression.package.pdf-text-engine]
+opt-level = 0
+
+[profile.regression.package.pdf-tokenizer]
+opt-level = 0
+
+[profile.regression.package.pdf-utils]
+opt-level = 0
