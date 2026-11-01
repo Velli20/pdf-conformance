@@ -7,6 +7,7 @@ mod annotation_areas;
 mod attribution;
 mod baseline;
 mod compare;
+mod context_render;
 mod corpus;
 mod corpus_pdfium;
 mod corpus_pdfjs;
@@ -121,6 +122,12 @@ enum Command {
         /// render and compare no page.
         #[arg(long, conflicts_with = "page")]
         read_only: bool,
+        /// Unpacked `pdfjs-dist` package: draws failing pages with pdf.js in Chrome for context.
+        #[arg(long, env = "PDFJS_DIST")]
+        pdfjs: Option<PathBuf>,
+        /// PDFKit renders from `pdfkit/render.swift`: shows failing pages as WebKit draws them.
+        #[arg(long)]
+        webkit_images: Option<PathBuf>,
     },
     /// Compare the read outcomes of the last run with an earlier run's `reads.json` and write
     /// `read-diff.md` and `read-diff.json` next to the last run.
@@ -218,12 +225,21 @@ enum WorkerCommand {
         reference_images: Option<PathBuf>,
         #[arg(long)]
         write_safe: bool,
-        /// DevTools endpoint of the browser the web renderer runs in.
-        #[arg(long, requires = "harness")]
+        /// DevTools endpoint of the browser the web renderer and pdf.js run in.
+        #[arg(long, requires = "server")]
         devtools: Option<String>,
-        /// URL of the web renderer's harness page.
+        /// Base URL of the harness server.
         #[arg(long, requires = "devtools")]
-        harness: Option<String>,
+        server: Option<String>,
+        /// Render Safe-PDF with the web renderer in the browser instead of Skia.
+        #[arg(long, requires = "devtools")]
+        web: bool,
+        /// Draw failing pages with pdf.js in the browser for context.
+        #[arg(long, requires = "devtools")]
+        pdfjs_context: bool,
+        /// Directory of PDFKit renders of this document (`pN.png`), drawn for context.
+        #[arg(long)]
+        webkit_images: Option<PathBuf>,
     },
 }
 
@@ -262,6 +278,8 @@ fn main() -> Result<ExitCode> {
             pdfium,
             reference_images,
             read_only,
+            pdfjs,
+            webkit_images,
         } => {
             if !(scale.is_finite() && scale > 0.0) {
                 bail!("--scale must be positive");
@@ -311,6 +329,8 @@ fn main() -> Result<ExitCode> {
                 pdfium,
                 reference_images: reference_images.map(std::path::absolute).transpose()?,
                 read_only,
+                pdfjs: pdfjs.map(std::path::absolute).transpose()?,
+                webkit_images: webkit_images.map(std::path::absolute).transpose()?,
             };
             if run::run(&options)? {
                 return Ok(ExitCode::FAILURE);
@@ -393,23 +413,33 @@ fn main() -> Result<ExitCode> {
             reference_images,
             write_safe,
             devtools,
-            harness,
-        }) => worker::page(&worker::PageJob {
-            pdf: &pdf,
-            password: password.as_deref(),
-            page,
-            scale,
-            max_side,
-            tolerance,
-            out_dir: &out_dir,
-            pdfium: pdfium.as_deref(),
-            reference_images: reference_images.as_deref(),
-            write_safe,
-            web: devtools
-                .zip(harness)
-                .map(|(devtools, harness)| web_render::WebEndpoints { devtools, harness })
-                .as_ref(),
-        })?,
+            server,
+            web,
+            pdfjs_context,
+            webkit_images,
+        }) => {
+            let browser = devtools
+                .zip(server)
+                .map(|(devtools, server)| web_render::WebEndpoints { devtools, server });
+            worker::page(&worker::PageJob {
+                pdf: &pdf,
+                password: password.as_deref(),
+                page,
+                scale,
+                max_side,
+                tolerance,
+                out_dir: &out_dir,
+                pdfium: pdfium.as_deref(),
+                reference_images: reference_images.as_deref(),
+                write_safe,
+                web: browser.as_ref().filter(|_| web),
+                context: context_render::ContextSources {
+                    pdfjs: browser.as_ref().filter(|_| pdfjs_context),
+                    webkit: webkit_images.as_deref(),
+                    annotations: web,
+                },
+            })?
+        }
     }
     Ok(ExitCode::SUCCESS)
 }

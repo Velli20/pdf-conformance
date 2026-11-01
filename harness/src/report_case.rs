@@ -3,7 +3,8 @@
 use crate::{
     baseline::Delta,
     model::{
-        CaseResult, Diagnostic, ErrorDetail, PageResult, ProcessEvidence, RenderStats, Status,
+        CaseResult, ContextScore, Diagnostic, ErrorDetail, PageResult, ProcessEvidence,
+        RenderStats, Status,
     },
     report_index::{self, Index, IndexCase},
     run::RunOptions,
@@ -291,6 +292,15 @@ fn page_section(
     if let Some(error) = &output.reference_error {
         writeln!(text, "- PDFium could not render this page: {error}")?;
     }
+    if let Some(line) = context_text(&output.context) {
+        writeln!(text, "- Context, Safe-PDF against: {line}")?;
+        if output.reference_outlier() {
+            writeln!(
+                text,
+                "- Every context renderer agrees with Safe-PDF here; PDFium may be the odd one out"
+            )?;
+        }
+    }
     let images: Vec<String> = output
         .files
         .iter()
@@ -368,6 +378,27 @@ fn page_section(
         writeln!(text, "\nWorker stderr (tail):\n\n```\n{stderr}\n```")?;
     }
     Ok(())
+}
+
+/// Returns how far Safe-PDF is from each context renderer, such as
+/// `pdf.js 0.051% (agrees), WebKit 3.200%`, or `None` when no context renderer was asked.
+pub fn context_text(scores: &[ContextScore]) -> Option<String> {
+    (!scores.is_empty()).then(|| {
+        scores
+            .iter()
+            .map(|score| match (score.mismatch, &score.error) {
+                (Some(mismatch), _) => format!(
+                    "{} {:.3}%{}",
+                    score.renderer.label(),
+                    mismatch * 100.0,
+                    if score.matches { " (agrees)" } else { "" }
+                ),
+                (None, Some(error)) => format!("{} unavailable ({error})", score.renderer.label()),
+                (None, None) => format!("{} unavailable", score.renderer.label()),
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    })
 }
 
 /// Describes the Safe-PDF render steps a worker reached; `None` when it stopped before them.

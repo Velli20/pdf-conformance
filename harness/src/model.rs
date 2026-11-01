@@ -184,6 +184,63 @@ pub struct PageOutput {
     pub draw_count: usize,
     /// Image and text files written to the case directory, relative to it.
     pub files: Vec<String>,
+    /// How far Safe-PDF's render is from each context renderer, for pages that fail against
+    /// the reference.
+    #[serde(default)]
+    pub context: Vec<ContextScore>,
+}
+
+impl PageOutput {
+    /// Returns true when every context renderer agrees with Safe-PDF, so the reference is
+    /// the odd one out. False when no context renderer drew the page.
+    pub fn reference_outlier(&self) -> bool {
+        !self.context.is_empty() && self.context.iter().all(|score| score.matches)
+    }
+}
+
+/// A renderer shown next to Safe-PDF and the reference for context. It never decides whether a
+/// page passes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ContextRenderer {
+    /// Mozilla's pdf.js in headless Chrome.
+    Pdfjs,
+    /// Apple's PDFKit, which Safari shows PDFs with.
+    Webkit,
+}
+
+impl ContextRenderer {
+    /// Returns the name used in file names and reports.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pdfjs => "pdfjs",
+            Self::Webkit => "webkit",
+        }
+    }
+
+    /// Returns the name shown to readers.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Pdfjs => "pdf.js",
+            Self::Webkit => "WebKit",
+        }
+    }
+}
+
+/// Safe-PDF's render scored against one context renderer.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ContextScore {
+    /// The context renderer.
+    pub renderer: ContextRenderer,
+    /// Fraction of pixels differing from Safe-PDF's render, when the context renderer drew
+    /// the page.
+    pub mismatch: Option<f64>,
+    /// True when the mismatch is within the run's tolerance.
+    pub matches: bool,
+    /// Why the context renderer has no image of the page.
+    pub error: Option<String>,
+    /// The context render written to the case directory, relative to it.
+    pub file: Option<String>,
 }
 
 /// Cost of rendering one page with Safe-PDF, reported by the worker as each step finishes.

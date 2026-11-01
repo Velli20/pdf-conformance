@@ -8,7 +8,7 @@ use crate::{
     corpus::Renderer,
     model::{PageOutput, PageResult, ReadOutput, Status},
     pdfium_build, process, report_case, run, signature,
-    web_render::WebHost,
+    web_render::{Sites, WebHost},
 };
 use anyhow::{Result, anyhow, bail};
 use std::{
@@ -142,7 +142,13 @@ pub fn run(args: &RenderArgs) -> Result<bool> {
         fs::copy(image, render.out.join(format!("p{page}-ref.png")))?;
     }
     render.web = match args.renderer {
-        Renderer::Web => Some(WebHost::start(args.chrome.clone())?),
+        Renderer::Web => Some(WebHost::start(
+            args.chrome.clone(),
+            Sites {
+                safe_pdf: true,
+                pdfjs: None,
+            },
+        )?),
         Renderer::Skia => None,
     };
     let finished = AtomicUsize::new(0);
@@ -252,7 +258,7 @@ impl Render<'_> {
             command.arg("--password").arg(password);
         }
         if let Some(web) = &self.web {
-            run::add_web(&mut command, web)?;
+            run::add_browser(&mut command, web, true, false)?;
         }
         Ok(command)
     }

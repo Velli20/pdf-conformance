@@ -5,7 +5,7 @@ use crate::{
     corpus::{self, CorpusKind, Renderer, Target},
     model::{Case, CaseResult, PageOutput, PageResult, ReadOutput, Status},
     process, read_diff, report_case, report_index, signature,
-    web_render::WebHost,
+    web_render::{Sites, WebHost},
     worker,
 };
 use anyhow::{Result, anyhow};
@@ -105,6 +105,11 @@ pub struct RunOptions {
     pub reference_images: Option<PathBuf>,
     /// Only read each document and count its pages; no page is rendered or compared.
     pub read_only: bool,
+    /// Unpacked `pdfjs-dist` package; failing pages are drawn with pdf.js for context.
+    pub pdfjs: Option<PathBuf>,
+    /// PDFKit renders, one `<PDF path relative to the corpus root>/pN.png` per page; failing
+    /// pages are shown with them for context.
+    pub webkit_images: Option<PathBuf>,
 }
 
 impl RunOptions {
@@ -171,9 +176,17 @@ pub fn run(options: &RunOptions) -> Result<bool> {
     )?;
     let out = corpus::output_dir(options.target());
     fs::create_dir_all(out.join("cases"))?;
-    let web = match options.renderer {
-        Renderer::Web if !options.read_only => Some(WebHost::start(options.chrome.clone())?),
-        _ => None,
+    let browser_needed = options.renderer == Renderer::Web || options.pdfjs.is_some();
+    let web = if browser_needed && !options.read_only {
+        Some(WebHost::start(
+            options.chrome.clone(),
+            Sites {
+                safe_pdf: options.renderer == Renderer::Web,
+                pdfjs: options.pdfjs.clone(),
+            },
+        )?)
+    } else {
+        None
     };
     let total = cases.len();
     let read = AtomicUsize::new(0);
@@ -460,7 +473,20 @@ fn run_page(
         command.arg("--password").arg(password);
     }
     if let Some(web) = web {
-        add_web(&mut command, web)?;
+        add_browser(
+            &mut command,
+            web,
+            options.renderer == Renderer::Web,
+            options.pdfjs.is_some(),
+        )?;
+    }
+    if let Some(dir) = options
+        .webkit_images
+        .as_ref()
+        .zip(case.path.strip_prefix(&options.root).ok())
+        .map(|(images, relative)| images.join(relative))
+    {
+        command.arg("--webkit-images").arg(dir);
     }
     let (output, process) = process::execute::<PageOutput>(command, options.limits)?;
     if let Some(web) = web
@@ -517,14 +543,26 @@ pub fn page_verdict(
     }
 }
 
-/// Points a page worker at the browser and harness page of the web renderer.
-pub fn add_web(command: &mut std::process::Command, web: &WebHost) -> Result<()> {
+/// Points a page worker at the browser and harness server: to render Safe-PDF there with the
+/// web renderer when `safe_pdf`, and to draw failing pages with pdf.js when `pdfjs`.
+pub fn add_browser(
+    command: &mut std::process::Command,
+    web: &WebHost,
+    safe_pdf: bool,
+    pdfjs: bool,
+) -> Result<()> {
     let endpoints = web.endpoints()?;
     command
         .arg("--devtools")
         .arg(endpoints.devtools)
-        .arg("--harness")
-        .arg(endpoints.harness);
+        .arg("--server")
+        .arg(endpoints.server);
+    if safe_pdf {
+        command.arg("--web");
+    }
+    if pdfjs {
+        command.arg("--pdfjs-context");
+    }
     Ok(())
 }
 

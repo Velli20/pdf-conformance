@@ -2,7 +2,9 @@
 
 use crate::{
     annotation_areas::{AnnotationArea, AnnotationMap},
-    attribution, compare, golden, inventory,
+    attribution, compare,
+    context_render::{ContextPage, ContextSources},
+    golden, inventory,
     model::{Diagnostic, PageOutput, ReadOutput, RenderStats},
     process::{STAGE_MARKER, STATS_MARKER},
     reference, regions, safe_render,
@@ -54,6 +56,8 @@ pub struct PageJob<'a> {
     pub write_safe: bool,
     /// Renders with the web renderer in this browser, annotations included, instead of Skia.
     pub web: Option<&'a WebEndpoints>,
+    /// Context renderers drawn next to a page that fails against the reference.
+    pub context: ContextSources<'a>,
 }
 
 fn stage(name: &str) {
@@ -454,6 +458,11 @@ pub fn page(job: &PageJob<'_>) -> Result<()> {
                 if let Ok(renderer) = &renderer {
                     write_operators(job, &mut output, renderer.document(), &prefix)?;
                 }
+                let glyphs = traced
+                    .as_ref()
+                    .map(|(_, layout)| glyph_boxes(layout, width, height))
+                    .unwrap_or_default();
+                write_context(job, &mut output, &bytes, safe_image, &glyphs)?;
             }
         }
         (reference_result, safe_result) => {
@@ -536,6 +545,33 @@ fn render_web(
         })?;
     }
     Ok(captured.map(|(image, _)| image))
+}
+
+/// Scores Safe-PDF's render against the context renderers and writes their images.
+fn write_context(
+    job: &PageJob<'_>,
+    output: &mut PageOutput,
+    bytes: &[u8],
+    safe: &RgbaImage,
+    glyphs: &[[u32; 4]],
+) -> Result<()> {
+    let page = ContextPage {
+        bytes,
+        password: job.password,
+        page: job.page,
+        safe,
+        glyphs,
+        tolerance: job.tolerance,
+    };
+    for (mut score, image) in job.context.score(&page) {
+        if let Some(image) = image {
+            let name = format!("p{}-{}.png", job.page, score.renderer.as_str());
+            write_png(job, output, &name, &image)?;
+            score.file = Some(name);
+        }
+        output.context.push(score);
+    }
+    Ok(())
 }
 
 /// Returns the name of the content-stream graph written for a page.

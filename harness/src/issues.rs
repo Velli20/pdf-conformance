@@ -18,7 +18,7 @@ use crate::{
     issue_body::{self, BodyContext},
     issue_state::{self, CorpusState, IssueState},
     model::{CaseResult, Status},
-    report_index::{Cluster, Index},
+    report_index::{Cluster, Index, IndexPage},
 };
 use anyhow::{Context, Result, bail};
 use std::{
@@ -88,6 +88,24 @@ pub struct Part<'a> {
     pub cluster: &'a Cluster,
 }
 
+/// How the context renderers side on a group's failing pages.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ContextAgreement {
+    /// Pages on which every context renderer agrees with Safe-PDF.
+    pub outliers: usize,
+    /// Pages a context renderer was asked to draw.
+    pub scored: usize,
+    /// Failing pages with the group's signature.
+    pub pages: usize,
+}
+
+impl ContextAgreement {
+    /// Returns true when the reference is the odd one out on every failing page.
+    pub fn disputed(&self) -> bool {
+        self.pages > 0 && self.outliers == self.pages
+    }
+}
+
 /// Failures sharing a signature across corpora; one issue each.
 pub struct Group<'a> {
     /// Shared signature.
@@ -154,6 +172,36 @@ impl Group<'_> {
             }
         }
         deltas
+    }
+
+    /// Returns the failing pages with this group's signature across corpora.
+    fn signature_pages(&self) -> impl Iterator<Item = &IndexPage> {
+        self.parts.iter().flat_map(move |part| {
+            part.run
+                .index
+                .cases
+                .iter()
+                .filter(|case| part.cluster.cases.contains(&case.id))
+                .flat_map(|case| &case.pages)
+                .filter(|page| page.signature.as_ref() == Some(&self.signature))
+        })
+    }
+
+    /// Returns how many of the group's failing pages every context renderer agrees with
+    /// Safe-PDF on, how many a context renderer was asked to draw, and how many there are.
+    pub fn context_agreement(&self) -> ContextAgreement {
+        self.signature_pages()
+            .fold(ContextAgreement::default(), |tally, page| {
+                ContextAgreement {
+                    outliers: tally
+                        .outliers
+                        .saturating_add(usize::from(page.reference_outlier)),
+                    scored: tally
+                        .scored
+                        .saturating_add(usize::from(!page.context.is_empty())),
+                    pages: tally.pages.saturating_add(1),
+                }
+            })
     }
 
     /// Returns true when a failure is worse than the recorded baseline.
@@ -657,6 +705,7 @@ mod tests {
                     likely_crates: Vec::new(),
                 }],
                 annotations: BTreeMap::new(),
+                reference_outliers: 0,
                 cases: Vec::new(),
             },
             results: BTreeMap::new(),

@@ -3,7 +3,7 @@
 use crate::{
     baseline::{Baseline, Delta},
     fetch,
-    model::{CaseResult, PageOutput, RenderStats, Status},
+    model::{CaseResult, ContextScore, PageOutput, RenderStats, Status},
     run::RunOptions,
 };
 use anyhow::Result;
@@ -41,6 +41,13 @@ pub struct IndexPage {
     /// Safe-PDF render cost, as far as the worker got.
     #[serde(default)]
     pub render: Option<RenderStats>,
+    /// Safe-PDF's render scored against each context renderer, for failing pages.
+    #[serde(default)]
+    pub context: Vec<ContextScore>,
+    /// True when the page fails against the reference while every context renderer agrees
+    /// with Safe-PDF.
+    #[serde(default)]
+    pub reference_outlier: bool,
 }
 
 /// One case row of the index.
@@ -122,6 +129,9 @@ pub struct Index {
     /// Differences inside annotations on failing pages, by annotation kind.
     #[serde(default)]
     pub annotations: BTreeMap<String, AnnotationTally>,
+    /// Failing pages on which every context renderer agrees with Safe-PDF.
+    #[serde(default)]
+    pub reference_outliers: usize,
     /// Cases in id order.
     pub cases: Vec<IndexCase>,
 }
@@ -132,6 +142,7 @@ pub fn build(options: &RunOptions, results: &[CaseResult], baseline: &Baseline) 
     let mut page_totals = BTreeMap::<String, usize>::new();
     let mut clusters = BTreeMap::<String, ClusterAccumulator>::new();
     let mut annotations = BTreeMap::<String, AnnotationTally>::new();
+    let mut reference_outliers = 0usize;
     let mut cases = Vec::with_capacity(results.len());
     for result in results {
         bump(&mut totals, result.status.as_str());
@@ -168,6 +179,13 @@ pub fn build(options: &RunOptions, results: &[CaseResult], baseline: &Baseline) 
                     .as_ref()
                     .and_then(|output| output.metrics.as_ref())
                     .map(|metrics| metrics.mismatch);
+                let reference_outlier = page.status.is_failure()
+                    && page
+                        .output
+                        .as_ref()
+                        .is_some_and(PageOutput::reference_outlier);
+                reference_outliers =
+                    reference_outliers.saturating_add(usize::from(reference_outlier));
                 IndexPage {
                     page: page.page,
                     status: page.status,
@@ -186,6 +204,12 @@ pub fn build(options: &RunOptions, results: &[CaseResult], baseline: &Baseline) 
                         .unwrap_or_default(),
                     reproduce: options.reproduce(&result.case.id, Some(page.page)),
                     render: page.process.render.clone(),
+                    context: page
+                        .output
+                        .as_ref()
+                        .map(|output| output.context.clone())
+                        .unwrap_or_default(),
+                    reference_outlier,
                 }
             })
             .collect();
@@ -246,6 +270,7 @@ pub fn build(options: &RunOptions, results: &[CaseResult], baseline: &Baseline) 
         page_totals,
         clusters,
         annotations,
+        reference_outliers,
         cases,
     }
 }
@@ -460,6 +485,14 @@ fn triage(index: &Index) -> Result<String> {
             text,
             "{substituted} pages differ only in text drawn with non-embedded fonts, which renderers substitute differently. \
              They are reported as `font_substitution`, count as expected, and are not filed as issues.\n"
+        )?;
+    }
+    if index.reference_outliers > 0 {
+        writeln!(
+            text,
+            "On {} failing pages, every context renderer (pdf.js, WebKit) agrees with Safe-PDF; PDFium may be the odd one out. \
+             The viewer's *Reference outlier* filter lists them.\n",
+            index.reference_outliers
         )?;
     }
     slow_pages(&mut text, index)?;

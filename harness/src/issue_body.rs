@@ -205,6 +205,9 @@ pub fn labels(group: &Group<'_>) -> Vec<String> {
     if group.regressed() {
         labels.push("regression".to_owned());
     }
+    if group.context_agreement().disputed() {
+        labels.push("reference-disputed".to_owned());
+    }
     if let Some(krate) = origin_crate(&group.signature) {
         labels.push(format!("area:{krate}"));
     }
@@ -222,6 +225,11 @@ pub fn label_style(label: &str) -> (&'static str, String) {
         ),
         "reference" => ("fbca04", "The PDFium reference failed".to_owned()),
         "regression" => ("d93f0b", "Worse than the recorded baseline".to_owned()),
+        "reference-disputed" => (
+            "bfd4f2",
+            "pdf.js and WebKit agree with Safe-PDF on every failing page; PDFium may be wrong"
+                .to_owned(),
+        ),
         other => match other.strip_prefix("area:") {
             Some(krate) => ("0e8a16", format!("Conformance failures defined in {krate}")),
             None => ("c5def5", "Conformance corpus".to_owned()),
@@ -491,6 +499,20 @@ fn facts(text: &mut String, group: &Group<'_>, context: &BodyContext) -> Result<
         .map(|part| part.run.index.pdfium.clone())
         .unwrap_or_default();
     writeln!(text, "| Reference | {reference} |")?;
+    let agreement = group.context_agreement();
+    if agreement.scored > 0 {
+        writeln!(
+            text,
+            "| Context | pdf.js and WebKit agree with Safe-PDF on {} of {} failing pages{} |",
+            agreement.outliers,
+            agreement.pages,
+            if agreement.disputed() {
+                ": PDFium may be the odd one out"
+            } else {
+                ""
+            }
+        )?;
+    }
     if let Some(link) = &context.run_link {
         writeln!(
             text,
@@ -568,8 +590,14 @@ fn example(
     )?;
     if let Some(page) = page {
         let viewer = viewer_link(&base, &entry.case.id, Some(page.page));
-        let cells: Vec<String> = [("ref", "PDFium"), ("safe", "Safe-PDF"), ("diff", "Difference")]
-            .into_iter()
+        let cells: Vec<String> = [
+            ("ref", "PDFium"),
+            ("safe", "Safe-PDF"),
+            ("diff", "Difference"),
+            ("pdfjs", "pdf.js"),
+            ("webkit", "WebKit"),
+        ]
+        .into_iter()
             .filter_map(|(suffix, caption)| {
                 let file = format!("p{}-{suffix}.png", page.page);
                 page.files.contains(&file).then(|| {
@@ -898,6 +926,8 @@ mod tests {
             files: vec!["p0-ref.png".to_owned(), "p0-content.txt".to_owned()],
             reproduce: "cargo conformance run --corpus pdfjs --case clippath --page 0".to_owned(),
             render: None,
+            context: Vec::new(),
+            reference_outlier: false,
         };
         let case = IndexCase {
             id: "clippath".to_owned(),
@@ -968,6 +998,7 @@ mod tests {
                     likely_crates: Vec::new(),
                 }],
                 annotations: BTreeMap::new(),
+                reference_outliers: 0,
                 cases: vec![case],
             },
             results: BTreeMap::from([("clippath".to_owned(), result)]),
@@ -1041,10 +1072,7 @@ mod tests {
             "Velli20/pdf-conformance",
             Target::new(CorpusKind::Pdfjs, Renderer::Skia),
         );
-        assert_eq!(
-            base,
-            "https://velli20.github.io/pdf-conformance/pdfjs/"
-        );
+        assert_eq!(base, "https://velli20.github.io/pdf-conformance/pdfjs/");
         assert_eq!(
             viewer_link(&base, "issue 1#2", Some(3)),
             "https://velli20.github.io/pdf-conformance/pdfjs/#case=issue%201%232&page=3"

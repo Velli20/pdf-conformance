@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>pdf.js reference render</title>
+<style>
+  html, body { margin: 0; background: #fff; overflow: hidden; }
+  canvas { position: absolute; top: 0; left: 0; }
+</style>
+</head>
+<body>
+<canvas id="page"></canvas>
+<script type="module">
+// Renders one page with pdf.js onto a canvas of exactly the reference size, one CSS pixel per
+// reference pixel. The harness screenshots the tab once `conformanceRender` resolves.
+import * as pdfjsLib from './build/pdf.mjs';
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = './build/pdf.worker.mjs';
+window.conformanceReady = Promise.resolve();
+
+// Resolves to `{}` once the page is drawn, or `{ error }` when pdf.js fails.
+// `annotations` draws annotation and form field appearances, as PDFium does for the same report.
+window.conformanceRender = async (base64, password, pageIndex, width, height, annotations) => {
+  const data = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
+  try {
+    const task = pdfjsLib.getDocument({
+      data,
+      password: password ?? undefined,
+      cMapUrl: './cmaps/',
+      cMapPacked: true,
+      standardFontDataUrl: './standard_fonts/',
+      wasmUrl: './wasm/',
+      iccUrl: './iccs/',
+      isEvalSupported: false,
+    });
+    const pdf = await task.promise;
+    const page = await pdf.getPage(pageIndex + 1);
+    const viewport = page.getViewport({ scale: 1 });
+    const canvas = document.getElementById('page');
+    canvas.width = width;
+    canvas.height = height;
+    Object.assign(canvas.style, { width: `${width}px`, height: `${height}px` });
+    await page.render({
+      canvas,
+      canvasContext: canvas.getContext('2d'),
+      viewport,
+      // Stretches the page box onto the canvas exactly, as the other renderers fit it.
+      transform: [width / viewport.width, 0, 0, height / viewport.height, 0, 0],
+      background: '#ffffff',
+      annotationMode: annotations ? pdfjsLib.AnnotationMode.ENABLE : pdfjsLib.AnnotationMode.DISABLE,
+    }).promise;
+    await task.destroy();
+  } catch (error) {
+    return { error: String(error) };
+  }
+  return {};
+};
+</script>
+</body>
+</html>

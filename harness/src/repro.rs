@@ -336,6 +336,10 @@ fn rerun(args: &ReproArgs, pages_repo: &str, selection: &Selection) -> Result<bo
         // the pdf.js corpus has no reference at all.
         reference_images: selection.index.is_some().then_some(references),
         read_only: selection.read_only,
+        // Reproducing checks Safe-PDF against the reference only; context renders do not
+        // decide whether a case still fails.
+        pdfjs: None,
+        webkit_images: None,
     };
     run::run(&options)?;
     let index: Index =

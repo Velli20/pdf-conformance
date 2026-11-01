@@ -1,10 +1,10 @@
-//! The web renderer: a page rendered by the browser stack (`pdf-web` on a Canvas 2D, with its
-//! annotation layer) in headless Chrome, driven over the DevTools protocol.
+//! Headless Chrome, driven over the DevTools protocol, for the renderers that run in a browser:
+//! Safe-PDF's browser stack (`pdf-web` on a Canvas 2D, with its annotation layer) and pdf.js.
 //!
-//! A run starts one [`WebHost`]: it builds the `web-canvas` WebAssembly package, serves it with
-//! the harness page on a loopback port, and launches the Chrome installed on the machine.
-//! Nothing is downloaded. Each page worker then opens its own tab with [`capture`], renders
-//! the page there and screenshots it.
+//! A run starts one [`WebHost`]: it builds the `web-canvas` WebAssembly package when Safe-PDF
+//! renders in the browser, serves the harness pages and their files on a loopback port, and
+//! launches the Chrome installed on the machine. Nothing is downloaded. Each page worker then
+//! opens its own tab with [`screenshot`], renders the page there and screenshots it.
 
 use crate::{
     corpus,
@@ -21,7 +21,7 @@ use std::{
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{
-        Mutex,
+        Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
     },
     thread,
@@ -32,8 +32,11 @@ use tungstenite::{Message, WebSocket, protocol::WebSocketConfig, stream::MaybeTl
 /// Worker stage while Safe-PDF renders the page in the browser.
 pub const WEB_RENDER_STAGE: &str = "safe-web-render";
 
-/// The harness page, served at `/`.
+/// The Safe-PDF harness page, served at `/`.
 const HARNESS: &str = include_str!("web_harness.html");
+
+/// The pdf.js harness page, served at `/pdfjs/`.
+const PDFJS_HARNESS: &str = include_str!("pdfjs_harness.html");
 
 /// Largest DevTools message accepted; screenshots of large pages arrive as one message.
 const MESSAGE_LIMIT: usize = 512 * 1024 * 1024;
@@ -52,33 +55,56 @@ const CHROME_NAMES: [&str; 4] = [
 /// Chrome's location in a macOS application install.
 const CHROME_MAC: &str = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 
-/// Where page workers find the browser and the harness page.
+/// Where page workers find the browser and the harness pages.
 #[derive(Clone, Debug)]
 pub struct WebEndpoints {
     /// `host:port` of Chrome's DevTools HTTP endpoint.
     pub devtools: String,
-    /// URL of the harness page.
-    pub harness: String,
+    /// Base URL of the harness server, ending in `/`.
+    pub server: String,
+}
+
+impl WebEndpoints {
+    /// Returns the URL of the Safe-PDF harness page.
+    pub fn safe_pdf_page(&self) -> String {
+        self.server.clone()
+    }
+
+    /// Returns the URL of the pdf.js harness page.
+    pub fn pdfjs_page(&self) -> String {
+        format!("{}pdfjs/", self.server)
+    }
+}
+
+/// What the harness server offers besides its pages.
+pub struct Sites {
+    /// Builds and serves the `web-canvas` package, for Safe-PDF rendering in the browser.
+    pub safe_pdf: bool,
+    /// Unpacked `pdfjs-dist` package served under `/pdfjs/`.
+    pub pdfjs: Option<PathBuf>,
 }
 
 /// The browser and harness server shared by the page workers of one run.
 pub struct WebHost {
     chrome: PathBuf,
-    harness: String,
+    server: String,
     browser: Mutex<Browser>,
 }
 
 impl WebHost {
-    /// Builds the WebAssembly package, starts the harness server and launches Chrome:
-    /// `chrome`, else the first Chrome found in the usual places.
-    pub fn start(chrome: Option<PathBuf>) -> Result<Self> {
+    /// Builds what `sites` needs, starts the harness server and launches Chrome: `chrome`,
+    /// else the first Chrome found in the usual places.
+    pub fn start(chrome: Option<PathBuf>, sites: Sites) -> Result<Self> {
         let chrome = find_chrome(chrome)?;
-        let pkg = build_package()?;
-        let harness = serve(pkg)?;
+        let files = Files {
+            pkg: sites.safe_pdf.then(build_package).transpose()?,
+            pdfjs: sites.pdfjs,
+        };
+        let server = serve(files)?;
         let browser = Browser::launch(&chrome)?;
         Ok(Self {
             chrome,
-            harness,
+            server,
             browser: Mutex::new(browser),
         })
     }
@@ -95,7 +121,7 @@ impl WebHost {
         }
         Ok(WebEndpoints {
             devtools: browser.devtools.clone(),
-            harness: self.harness.clone(),
+            server: self.server.clone(),
         })
     }
 
@@ -119,8 +145,8 @@ impl WebHost {
     }
 }
 
-/// Renders `page` of the document in a new tab at `width` x `height` pixels and returns the
-/// screenshot with the milliseconds Safe-PDF took in the browser.
+/// Renders `page` of the document with Safe-PDF in a new tab at `width` x `height` pixels and
+/// returns the screenshot with the milliseconds Safe-PDF took in the browser.
 ///
 /// A Safe-PDF error inside the browser is returned as the error, with the message the
 /// WebAssembly module reported.
@@ -132,6 +158,32 @@ pub fn capture(
     width: u32,
     height: u32,
 ) -> Result<(RgbaImage, u128)> {
+    let render = format!(
+        "conformanceRender({}, {}, {page}, {width}, {height})",
+        json!(BASE64.encode(bytes)),
+        json!(password),
+    );
+    screenshot(
+        endpoints,
+        &endpoints.safe_pdf_page(),
+        &render,
+        WEB_RENDER_STAGE,
+        (width, height),
+    )
+}
+
+/// Opens `page_url` in a new tab sized `width` x `height`, waits for its
+/// `conformanceReady` promise, evaluates `render` in worker stage `stage` and screenshots the
+/// tab. Returns the screenshot with the milliseconds `render` took.
+///
+/// `render` resolves to an object; an `error` member is returned as the error.
+pub fn screenshot(
+    endpoints: &WebEndpoints,
+    page_url: &str,
+    render: &str,
+    stage: &str,
+    (width, height): (u32, u32),
+) -> Result<(RgbaImage, u128)> {
     eprintln!("{STAGE_MARKER}web-open");
     let tab = Tab::open(&endpoints.devtools)?;
     let mut session = Session::connect(&tab.socket)?;
@@ -140,17 +192,13 @@ pub fn capture(
         json!({ "width": width, "height": height, "deviceScaleFactor": 1, "mobile": false }),
     )?;
     session.call("Page.enable", json!({}))?;
-    session.call("Page.navigate", json!({ "url": endpoints.harness }))?;
+    session.call("Page.navigate", json!({ "url": page_url }))?;
     session.wait_for("Page.loadEventFired")?;
     session.evaluate("window.conformanceReady.then(() => true)")?;
 
-    eprintln!("{STAGE_MARKER}{WEB_RENDER_STAGE}");
+    eprintln!("{STAGE_MARKER}{stage}");
     let started = Instant::now();
-    let rendered = session.evaluate(&format!(
-        "conformanceRender({}, {}, {page}, {width}, {height})",
-        json!(BASE64.encode(bytes)),
-        json!(password),
-    ))?;
+    let rendered = session.evaluate(render)?;
     let elapsed = started.elapsed().as_millis();
     if let Some(error) = rendered.get("error").and_then(Value::as_str) {
         bail!("{error}");
@@ -220,24 +268,53 @@ fn build_package() -> Result<PathBuf> {
     Ok(root.join("examples").join("web-canvas").join("pkg"))
 }
 
-/// Serves the harness page and the files of `pkg` on a loopback port; returns the page URL.
-fn serve(pkg: PathBuf) -> Result<String> {
+/// Directories the harness server reads files from.
+struct Files {
+    /// The built `web-canvas` package, served flat under `/pkg/`.
+    pkg: Option<PathBuf>,
+    /// The unpacked `pdfjs-dist` package, served with its subdirectories under `/pdfjs/`.
+    pdfjs: Option<PathBuf>,
+}
+
+impl Files {
+    /// Returns the file a request path names, if it names one this server offers.
+    fn resolve(&self, path: &str) -> Option<PathBuf> {
+        let safe = |part: &str| !part.is_empty() && !part.starts_with('.') && !part.contains('\\');
+        if let Some(name) = path.strip_prefix("/pkg/") {
+            return (safe(name) && !name.contains('/'))
+                .then(|| self.pkg.as_ref().map(|pkg| pkg.join(name)))
+                .flatten();
+        }
+        let relative = path.strip_prefix("/pdfjs/")?;
+        let root = self.pdfjs.as_ref()?;
+        relative.split('/').all(safe).then(|| {
+            relative
+                .split('/')
+                .fold(root.clone(), |dir, part| dir.join(part))
+        })
+    }
+}
+
+/// Serves the harness pages and `files` on a loopback port; returns the server's base URL.
+fn serve(files: Files) -> Result<String> {
     let listener = TcpListener::bind("127.0.0.1:0")?;
     let url = format!("http://{}/", listener.local_addr()?);
+    let files = Arc::new(files);
     thread::spawn(move || {
         for stream in listener.incoming().flatten() {
-            let pkg = pkg.clone();
+            let files = Arc::clone(&files);
             thread::spawn(move || {
                 // A browser that drops a connection only loses that response.
-                let _ = respond(stream, &pkg);
+                let _ = respond(stream, &files);
             });
         }
     });
     Ok(url)
 }
 
-/// Answers one request: `/` with the harness, `/pkg/<file>` with a file of `pkg`.
-fn respond(mut stream: TcpStream, pkg: &Path) -> Result<()> {
+/// Answers one request: `/` and `/pdfjs/` with the harness pages, other paths with the file
+/// [`Files::resolve`] finds.
+fn respond(mut stream: TcpStream, files: &Files) -> Result<()> {
     let mut reader = BufReader::new(&stream);
     let mut request = String::new();
     reader.read_line(&mut request)?;
@@ -245,17 +322,16 @@ fn respond(mut stream: TcpStream, pkg: &Path) -> Result<()> {
     while reader.read_line(&mut header)? > 2 {
         header.clear();
     }
-    let path = request.split_whitespace().nth(1).unwrap_or_default();
-    let file = path
-        .strip_prefix("/pkg/")
-        .filter(|name| !name.is_empty() && !name.starts_with('.') && !name.contains(['/', '\\']));
-    let (status, content_type, body) = match (path, file) {
-        ("/", _) => ("200 OK", "text/html", HARNESS.as_bytes().to_vec()),
-        (_, Some(name)) => match fs::read(pkg.join(name)) {
-            Ok(body) => ("200 OK", content_type(name), body),
-            Err(_) => ("404 Not Found", "text/plain", b"not found".to_vec()),
+    let target = request.split_whitespace().nth(1).unwrap_or_default();
+    let path = target.split(['?', '#']).next().unwrap_or_default();
+    let not_found = || ("404 Not Found", "text/plain", b"not found".to_vec());
+    let (status, content_type, body) = match path {
+        "/" => ("200 OK", "text/html", HARNESS.as_bytes().to_vec()),
+        "/pdfjs/" => ("200 OK", "text/html", PDFJS_HARNESS.as_bytes().to_vec()),
+        _ => match files.resolve(path).map(|file| (fs::read(&file), file)) {
+            Some((Ok(body), file)) => ("200 OK", content_type(&file), body),
+            _ => not_found(),
         },
-        _ => ("404 Not Found", "text/plain", b"not found".to_vec()),
     };
     write!(
         stream,
@@ -267,13 +343,11 @@ fn respond(mut stream: TcpStream, pkg: &Path) -> Result<()> {
     Ok(())
 }
 
-fn content_type(name: &str) -> &'static str {
-    match Path::new(name)
-        .extension()
-        .and_then(|extension| extension.to_str())
-    {
+fn content_type(file: &Path) -> &'static str {
+    match file.extension().and_then(|extension| extension.to_str()) {
         Some("wasm") => "application/wasm",
-        Some("js") => "text/javascript",
+        Some("js" | "mjs") => "text/javascript",
+        Some("json") => "application/json",
         Some("css") => "text/css",
         Some("html") => "text/html",
         _ => "application/octet-stream",
