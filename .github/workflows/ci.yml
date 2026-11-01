@@ -1,0 +1,43 @@
+name: CI
+
+# Builds and lints the harness against Safe-PDF's main branch.
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up the harness
+        uses: ./.github/actions/setup
+        with:
+          safe-pdf-repository: Velli20/safe-pdf
+          safe-pdf-sha: main
+          cache-key: ci
+          pdfium: "false"
+
+      - name: Format
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: Test
+        run: cargo test
+
+      - name: Shell scripts
+        run: for script in .github/scripts/*.sh; do bash -n "$script"; done

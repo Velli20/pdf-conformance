@@ -1,0 +1,91 @@
+name: Set up the harness
+description: >
+  Checks Safe-PDF out into safe-pdf/ at the commit under test, installs Rust and Skia's
+  system libraries, restores the cargo cache (saved later only by runs that build trusted
+  code), and installs the prebuilt PDFium the harness compares against.
+
+inputs:
+  safe-pdf-sha:
+    description: Safe-PDF commit to build the harness against.
+    required: true
+  safe-pdf-repository:
+    description: Safe-PDF repository as owner/name.
+    required: true
+  cache-key:
+    description: Name of the cargo cache, so jobs with different builds keep their own.
+    required: true
+  wasm:
+    description: Also install the wasm32 target and wasm-bindgen-cli for the web renderer.
+    default: "false"
+  pdfium:
+    description: Install the prebuilt PDFium.
+    default: "true"
+
+outputs:
+  cache-primary-key:
+    description: Key to save the cargo cache under.
+    value: ${{ steps.cargo-cache.outputs.cache-primary-key }}
+  cache-hit:
+    description: True when the cargo cache matched exactly.
+    value: ${{ steps.cargo-cache.outputs.cache-hit }}
+
+runs:
+  using: composite
+  steps:
+    - name: Check out Safe-PDF
+      uses: actions/checkout@v4
+      with:
+        repository: ${{ inputs.safe-pdf-repository }}
+        ref: ${{ inputs.safe-pdf-sha }}
+        path: safe-pdf
+        persist-credentials: false
+
+    - name: Set up Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: ${{ inputs.wasm == 'true' && 'wasm32-unknown-unknown' || '' }}
+
+    - name: Install system dependencies (Skia)
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends libfontconfig1-dev libfreetype6-dev
+
+    - name: Restore cargo cache
+      id: cargo-cache
+      uses: actions/cache/restore@v4
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          ~/.cargo/bin/wasm-bindgen
+          target/regression
+          safe-pdf/target/release
+          safe-pdf/target/wasm32-unknown-unknown
+        key: ${{ runner.os }}-${{ inputs.cache-key }}-${{ hashFiles('Cargo.lock', 'safe-pdf/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-${{ inputs.cache-key }}-
+
+    # Must match Safe-PDF's `wasm-bindgen` pin; `cargo xtask web-canvas` refuses other versions.
+    - name: Install wasm-bindgen-cli
+      if: inputs.wasm == 'true'
+      shell: bash
+      run: |
+        version=$(grep -A2 '^name = "wasm-bindgen"$' safe-pdf/Cargo.lock | sed -n 's/^version = "\(.*\)"$/\1/p' | head -1)
+        if ! command -v wasm-bindgen >/dev/null || [ "$(wasm-bindgen --version)" != "wasm-bindgen $version" ]; then
+          cargo install wasm-bindgen-cli --version "$version" --locked --force
+        fi
+        wasm-bindgen --version
+        google-chrome --version
+
+    - name: Install prebuilt PDFium
+      if: inputs.pdfium == 'true'
+      shell: bash
+      run: |
+        dir="$RUNNER_TEMP/pdfium"
+        mkdir -p "$dir"
+        curl -sSfL -o "$dir/pdfium.tgz" \
+          "https://github.com/bblanchon/pdfium-binaries/releases/download/${PDFIUM_RELEASE}/pdfium-linux-x64.tgz"
+        echo "${PDFIUM_SHA256}  $dir/pdfium.tgz" | sha256sum -c -
+        tar -xzf "$dir/pdfium.tgz" -C "$dir"
+        echo "PDFIUM_LIBRARY=$dir/lib/libpdfium.so" >> "$GITHUB_ENV"

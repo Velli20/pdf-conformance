@@ -1,13 +1,19 @@
 # pdf-conformance
 
-Renders PDF test corpora with Safe-PDF, compares the pages with a PDFium
-reference, and writes the evidence needed to start a fix: images, differing
-regions, the drawing calls and text in each region, the PDF features used,
-error chains with backtraces, and failure clusters.
+Renders PDF test corpora with [Safe-PDF](https://github.com/Velli20/safe-pdf), compares the
+pages with a PDFium reference, and writes the evidence needed to start a fix: images,
+differing regions, the drawing calls and text in each region, the PDF features used, error
+chains with backtraces, and failure clusters. pdf.js and WebKit are drawn next to failing pages
+for context, so a page where PDFium is the odd one out stands out. Failures are filed as issues
+in the Safe-PDF repository.
 
 ## Quick start
 
+The harness builds Safe-PDF's crates from `safe-pdf/` in this repository: a symlink to your
+Safe-PDF checkout, or a clone. CI checks Safe-PDF out there at the commit under test.
+
 ```sh
+ln -s ~/safe-pdf safe-pdf                            # or: git clone https://github.com/Velli20/safe-pdf
 # PDFium corpus: compared against the official golden images it ships, no setup needed.
 cargo conformance fetch --corpus pdfium              # or: --root ~/pdfium_tests
 cargo conformance run   --corpus pdfium              # add the same --root if you used one
@@ -24,6 +30,35 @@ Then open `target/conformance/<corpus>/index.html`, or start from
 `fetch` clones a corpus at its pinned revision from its upstream repository.
 An existing checkout passed with `--root` is used as it is, and `fetch` says
 when its revision differs from the pinned one.
+
+## Context renderers
+
+PDFium alone decides whether a page passes and which issue a failure belongs to. Pages that fail
+against it are also drawn by context renderers, and Safe-PDF's image is scored against each:
+
+- **pdf.js** (`--pdfjs <dir>` or `PDFJS_DIST`): an unpacked
+  [`pdfjs-dist`](https://www.npmjs.com/package/pdfjs-dist) package, run in the same headless
+  Chrome as the web renderer (see [Web renderer](#web-renderer) for finding Chrome). CI
+  downloads the version pinned in the workflow and checks its integrity; locally, unpack a
+  release yourself.
+- **WebKit** (`--webkit-images <dir>`): pages drawn with Apple's PDFKit, which Safari shows PDFs
+  with. PDFKit runs only on macOS, so the pages are rendered beforehand by
+  `pdfkit/render.swift` into `<dir>/<PDF path relative to the corpus root>/pN.png`:
+
+  ```sh
+  swiftc -O -o pdfkit-render pdfkit/render.swift
+  ./pdfkit-render --corpus target/conformance/corpora/pdfium --out webkit/pdfium
+  ./pdfkit-render --corpus target/conformance/corpora/pdfium --out webkit/pdfium-web --annotations
+  ```
+
+  Renders sized within 2 pixels of the reference are scaled to it; others are reported.
+
+Both draw annotations and form fields only for the web renderer's report, as PDFium does. A
+context renderer *agrees* with Safe-PDF when their images differ within the run's tolerance. A
+failing page on which every context renderer agrees is a **reference outlier**: the viewer
+filters for them, `TRIAGE.md` counts them, and an issue whose failing pages are all outliers is
+labelled `reference-disputed`. Context images are written only for failing pages
+(`pN-pdfjs.png`, `pN-webkit.png`); `repro` and `verify` never use them.
 
 ## References
 
@@ -63,14 +98,14 @@ cargo conformance render <pdf> --renderer web            # one page
   `--chrome <path>` / `CHROME_PATH`), the `wasm32-unknown-unknown` target and
   `wasm-bindgen-cli 0.2.100`. Nothing is downloaded. Set `CONFORMANCE_CHROME_NO_SANDBOX=1`
   where Chrome's sandbox cannot start, such as CI containers.
-- **How it runs.** The run builds `examples/web-canvas` with
+- **How it runs.** The run builds Safe-PDF's `examples/web-canvas` with
   `cargo xtask web-canvas --profile release`, serves it with a harness page on a loopback
   port, and starts one headless Chrome. Each page worker opens its own tab, renders the page
   fitted to the reference size (one CSS pixel per reference pixel), and screenshots it over the
   DevTools protocol. The worker's time limit covers the tab; a killed worker's tab is closed, and
   Chrome is relaunched when it stops answering.
 - **Reports.** The web renderer writes its own report to `target/conformance/<corpus>-web/`
-  with its own baseline (`baselines/<corpus>-web.json`), viewer (`/conformance/pdfium-web/` on
+  with its own baseline (`harness/baselines/<corpus>-web.json`), viewer (`/pdfium-web/` on
   Pages) and issues. Its signatures carry `[web]` after the status (`mismatch: [web] …`), so
   they never merge with the Skia renderer's clusters. `show`, `accept` and `read-diff` take
   `--renderer web`. `issues` and `repro` take report names such as `--corpus pdfium-web`.
@@ -153,8 +188,9 @@ cargo conformance repro conf2-98ff16df22ee
 issue at the corpus revision the report used, downloads the PDFium images of their failing
 pages, and reruns those cases against the images. It needs neither a corpus checkout nor a
 PDFium build, so it also works in cloud sessions. Results land in
-`target/conformance/<corpus>/` as for `run`. The repository is read from `origin`; pass
-`--repo owner/name` otherwise.
+`target/conformance/<corpus>/` as for `run`. The issues repository is read from the `origin` of
+`safe-pdf/` and the published reports from this repository's `origin`; pass `--repo owner/name`
+or `--pages-repo owner/name` otherwise.
 
 The pdf.js corpus is only read on `main`, so it has no published report. For such an issue,
 `repro` takes the cases from the issue's machine-readable summary (through `gh`) and reruns
@@ -166,8 +202,8 @@ case still fails with the issue's signature, and also when a case now fails with
 signature, such as a timeout that became a wrong render. Pass `--allow-different` to accept
 that.
 
-The skill in `.claude/skills/fix-conformance-issue/SKILL.md` describes the whole loop for
-agents.
+The `fix-conformance-issue` skill in the Safe-PDF repository describes the whole loop for
+agents. The fix and its unit test land in Safe-PDF.
 
 ## Reading the images
 
@@ -248,39 +284,56 @@ runaway read cannot exhaust the machine and take the run down with it.
 (`--reference pdfium`), so the pdfium corpus is compared without annotations and includes
 PDFs that have no goldens.
 
-- **Reads (pull requests, `main` and manual runs):** the `reads` job runs both corpora with
-  `--read-only`: every document is opened with Safe-PDF and PDFium and their page counts are
-  compared, but no page is rendered. Each run writes `reads.json` and uploads the report as the
-  `reads-<corpus>` artifact. Runs on `main` cache `reads.json` under the commit.
+- **Triggers:** Safe-PDF's `conformance-dispatch.yml` sends a `repository_dispatch` for every
+  pull request (`safe-pdf-pr`: pr, head_sha, base_sha) and every push to its `main`
+  (`safe-pdf-main`: sha). Pushes to this repository, a nightly schedule and manual runs (with a
+  Safe-PDF ref) check Safe-PDF's `main` the same way. The `target` job resolves the commit, and
+  every job checks Safe-PDF out into `safe-pdf/` at it.
+- **Corpora:** the `corpus` job fetches each corpus once at its pinned revision and caches it
+  for every job, the macOS one included.
+- **Reads (every run):** the `reads` job runs both corpora with `--read-only`: every document is
+  opened with Safe-PDF and PDFium and their page counts are compared, but no page is rendered.
+  Each run uploads the report as the `reads-<corpus>` artifact. Runs on `main` commits cache
+  `reads.json` under the Safe-PDF commit.
 - **Pull requests:** the reads are compared with the base commit's, from that cache or, when
   the base commit has none yet, by reading the corpus at the base commit in the same job.
-  `cargo conformance read-diff --corpus <corpus> --base <reads.json>` writes `read-diff.md`
-  and `read-diff.json`. A document regresses when Safe-PDF no longer opens it, crashes or
-  times out on it, or newly counts a different number of pages than PDFium; the reverse is an
-  improvement. When anything regressed or improved, the `read-comment` job posts one comment
-  on the pull request and updates it on later pushes (also once nothing differs any more).
-  Pull requests from forks get no comment. Pull requests are never failed by these jobs.
-- **Rendering (`main` and manual runs):** the PDFium corpus is rendered and every page is
-  compared against its baseline, uploaded as the `conformance-pdfium` artifact (viewer,
-  `TRIAGE.md`, `results.json`, bundles) with a job summary. The pdf.js corpus is not rendered.
-  The `issues` job then reports the PDFium render and the pdf.js reads together with
-  `cargo conformance issues --corpus pdfium --corpus pdfjs`.
-- **Gating later:** add `pull_request` to `FAIL_ON_EVENTS` and the `pull_request` trigger to
-  the rendering job to fail pull requests on render regressions against the baselines.
-- **Published viewer:** runs on `main` deploy the viewers to GitHub Pages at
-  <https://velli20.github.io/safe-pdf/conformance/>, next to the web-canvas demo. Issues
-  link straight into it (`#case=<id>&page=<n>`) and embed its images. Pages holds one site,
-  so the `publish` job and `ci.yml`'s `deploy` job each fetch the other half from its newest
-  `pages-conformance` / `pages-web-canvas` artifact (`.github/scripts/assemble-pages.sh`).
-- **Issues:**
+  `cargo conformance read-diff --corpus <corpus> --base <reads.json>` writes `read-diff.md` and
+  `read-diff.json`. A document regresses when Safe-PDF no longer opens it, crashes or times out
+  on it, or newly counts a different number of pages than PDFium; the reverse is an
+  improvement. When anything regressed or improved, `read-comment` posts one comment on the
+  pull request and updates it on later pushes (also once nothing differs any more). The
+  `conformance/reads` commit status shows the run on the pull request. Pull requests are never
+  failed.
+- **Rendering (`main` commits):** the `pdfkit` job renders the PDFium corpus with PDFKit on
+  macOS. The `conformance` job then renders the corpus with the Skia and web renderers,
+  compares every page with PDFium and draws failing pages with pdf.js and the PDFKit renders.
+  Reports are uploaded as `conformance-<report>` artifacts with a job summary. The pdf.js
+  corpus is not rendered.
+- **Issues (`main` commits):** `cargo conformance issues --corpus pdfium --corpus pdfjs
+  --corpus pdfium-web` files, updates and closes issues in Safe-PDF (`--repo`, or
+  `CONFORMANCE_ISSUES_REPO`).
+- **Published viewer:** runs on `main` commits deploy the viewers to this repository's GitHub
+  Pages, <https://velli20.github.io/pdf-conformance/>. Issues link straight into it
+  (`#case=<id>&page=<n>`) and embed its images.
+- **Trust:** pull request runs build code from the pull request, possibly from a fork. They get
+  no secrets and save no caches. Only `status-start`, `read-comment` and `issues` mint a token
+  for Safe-PDF, and they run no pull request code (`issues` only runs on `main` commits). The
+  `corpus` job builds the harness against the pull request's base commit.
+- **GitHub App:** a GitHub App installed on both repositories, with *Issues*, *Pull requests*
+  and *Commit statuses* write access on Safe-PDF and *Contents* write access here (to receive
+  dispatches). Its id and private key are the `CONFORMANCE_APP_ID` and `CONFORMANCE_APP_KEY`
+  secrets of both repositories.
+- **Gating later:** add `repository_dispatch` to `FAIL_ON_EVENTS` and render pull requests to
+  fail them on render regressions against the baselines.
+- **Issue lifecycle:**
   - One issue per cause across both corpora, labelled `conformance`, `conformance:<corpus>`,
-    `area:<crate>` when the error's crate is known, and `crash`, `harness` or `regression`
-    where they apply. At most 15 new issues per run; the rest follow in later runs, worst
-    status first.
-  - Each body opens with an alert and a table of facts, links the suspect source line (GitHub
-    shows it as a snippet), shows one case's images from Pages, lists the cases with viewer,
-    summary and PDF links, gives the `repro` and `verify` commands, and ends with a JSON
-    block for agents.
+    `area:<crate>` when the error's crate is known, and `crash`, `harness`, `regression` or
+    `reference-disputed` where they apply. At most 15 new issues per run; the rest follow in
+    later runs, worst status first.
+  - Each body opens with an alert and a table of facts, links the suspect source line in
+    Safe-PDF (GitHub shows it as a snippet), shows one case's images from Pages, lists the
+    cases with viewer, summary and PDF links, gives the `repro` and `verify` commands, and ends
+    with a JSON block for agents.
   - A hidden `conformance-state` comment holds the issue's key and, per corpus, its cluster
     size and how many full runs in a row it was absent:
     - **Open:** the body is refreshed silently. A comment is posted only when new documents
@@ -293,19 +346,19 @@ PDFs that have no goldens.
     (the pdf.js corpus) file and refresh issues but never count a failure as absent, so they
     do not close issues either.
   - Preview locally with `cargo conformance issues --corpus pdfium --corpus pdfjs --repo
-    owner/name --dry-run`. Bodies are written to `target/conformance/issues/`.
-- **PDFium on CI:** the conformance legs download the pinned prebuilt
-  `pdfium-linux-x64` from bblanchon/pdfium-binaries (`chromium/7881`, verified
-  by SHA-256). Prebuilt binaries are used only in CI; local tooling never
-  downloads them.
-- **Bootstrapping baselines:** run the workflow manually with `accept` checked, download
-  the `conformance-baseline-<corpus>` artifacts, and commit them as
-  `tools/conformance/baselines/<corpus>.json`. Until a baseline exists, regressions are
-  reported but nothing is labelled `regression`. Manual runs on other branches file no
-  issues, so baselines can be recorded from a branch.
+    owner/name --pages-repo owner/name --dry-run`. Bodies are written to
+    `target/conformance/issues/`.
+- **Prebuilt dependencies on CI:** the workflow downloads the pinned prebuilt
+  `pdfium-linux-x64` from bblanchon/pdfium-binaries (`chromium/7881`, verified by SHA-256) and
+  `pdfjs-dist` from the npm registry (verified against its published integrity). Local
+  tooling never downloads them.
+- **Bootstrapping baselines:** run the workflow manually with `accept` checked, download the
+  `conformance-baseline-<report>` artifacts, and commit them as
+  `harness/baselines/<report>.json`. Until a baseline exists, regressions are reported but
+  nothing is labelled `regression`.
 
 ## Baselines
 
-`baselines/<corpus>.json` records the expected status and mismatch of every
+`harness/baselines/<corpus>.json` records the expected status and mismatch of every
 page. `run` exits non-zero only on regressions against it, or on new crashes
 and timeouts.
