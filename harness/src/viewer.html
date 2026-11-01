@@ -14,7 +14,8 @@
           --accent: #7aa2f7; --bad: #f07167; --warn: #e9b44c; --good: #6fcf97; --sel: #26324a; }
 }
 * { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--text); font: 13px/1.45 system-ui, sans-serif; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 13px/1.45 system-ui, sans-serif;
+  display: flex; flex-direction: column; height: 100vh; }
 header { padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel); }
 header h1 { font-size: 15px; margin: 0 0 4px; }
 header .meta { color: var(--muted); }
@@ -22,8 +23,11 @@ header .meta { color: var(--muted); }
 .controls select, .controls input { font: inherit; padding: 4px 6px; background: var(--panel); color: var(--text);
   border: 1px solid var(--line); border-radius: 4px; max-width: 100%; }
 .controls input[type=search] { min-width: 220px; }
-main { display: grid; grid-template-columns: minmax(320px, 36%) 1fr; height: calc(100vh - 100px); }
-@media (max-width: 800px) { main { grid-template-columns: 1fr; height: auto; } #list { max-height: 45vh; } }
+.controls .pair-pick { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); }
+.controls button { font: inherit; padding: 4px 8px; background: var(--panel); color: var(--text);
+  border: 1px solid var(--line); border-radius: 4px; cursor: pointer; }
+main { display: grid; grid-template-columns: minmax(320px, 36%) 1fr; flex: 1; min-height: 0; }
+@media (max-width: 800px) { body { height: auto; } main { grid-template-columns: 1fr; } #list { max-height: 45vh; } }
 #list { overflow: auto; border-right: 1px solid var(--line); }
 table { width: 100%; border-collapse: collapse; }
 th, td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
@@ -44,7 +48,8 @@ td.id { word-break: break-all; }
 .modes button { font: inherit; padding: 3px 10px; border: 1px solid var(--line); background: var(--panel);
   color: var(--text); border-radius: 4px; cursor: pointer; }
 .modes button.on { border-color: var(--accent); color: var(--accent); }
-.stage { position: relative; display: inline-block; max-width: 100%; background: #fff; }
+.stage { position: relative; display: inline-block; max-width: 100%; background: #fff; isolation: isolate; }
+.stage .blend { mix-blend-mode: difference; }
 .stage img { display: block; max-width: 100%; height: auto; }
 .stage .over { position: absolute; inset: 0; }
 .pair { display: flex; gap: 8px; flex-wrap: wrap; }
@@ -52,6 +57,9 @@ td.id { word-break: break-all; }
 .outlier { display: inline-block; font-size: 11px; padding: 0 5px; border: 1px solid var(--accent); border-radius: 8px; color: var(--accent); }
 .pair figcaption { color: var(--muted); font-size: 12px; }
 .pair img { width: 100%; height: auto; background: #fff; }
+.pair .stage { width: 100%; }
+div.sig.others { margin-top: 12px; }
+.others figure { flex: 0 1 160px; }
 input[type=range] { width: 260px; max-width: 100%; }
 .links a { color: var(--accent); margin-right: 12px; }
 code { font-size: 12px; background: var(--bg); padding: 1px 4px; border-radius: 3px; word-break: break-all; }
@@ -69,21 +77,29 @@ code { font-size: 12px; background: var(--bg); padding: 1px 4px; border-radius: 
     <option value="improved">Improved</option><option value="new">New</option><option value="unchanged">Unchanged</option></select>
   <select id="signature"><option value="">All signatures</option></select>
   <select id="context"><option value="">Any context</option><option value="outlier">Reference outlier (pdf.js and WebKit agree with Safe-PDF)</option></select>
+  <span class="pair-pick">Compare <select id="left" title="Left / underneath"></select> with
+    <select id="right" title="Right / on top"></select> <button id="swap" title="Swap (s)">⇄</button></span>
   <input id="search" type="search" placeholder="Filter by case id">
 </div>
 <main>
   <div id="list"><table><thead><tr>
-    <th data-sort="id">Case / page</th><th data-sort="status">Status</th><th data-sort="mismatch">Mismatch ▾</th>
+    <th data-sort="id">Case / page</th><th data-sort="status">Status</th><th data-sort="mismatch" id="mmhead">Mismatch</th>
   </tr></thead><tbody id="rows"></tbody></table></div>
-  <section id="detail"><div class="empty">Select a row. Keys: j/k move, 1–4 switch view.</div></section>
+  <section id="detail"><div class="empty">Select a row. Keys: j/k move, 1–4 switch view, s swaps the compared renderers.</div></section>
 </main>
 <script src="index.js"></script>
 <script>
 const data = window.CONFORMANCE;
 const $ = (id) => document.getElementById(id);
-let sortKey = "mismatch", sortDesc = true, selected = 0, mode = "side", against = "ref";
-// Context renderers: shown next to PDFium for failing pages; PDFium alone decides the verdict.
-const CONTEXT = [["pdfjs", "pdf.js"], ["webkit", "WebKit"]];
+let sortKey = "mismatch", sortDesc = true, selected = 0, mode = "side";
+// Every renderer a page may have an image of: key, label, file suffix. PDFium alone decides the
+// verdict; pdf.js and WebKit are drawn for failing pages as context.
+const RENDERERS = [["ref", "PDFium", "-ref.png"], ["safe", "Safe-PDF", "-safe.png"], ["pdfjs", "pdf.js", "-pdfjs.png"], ["webkit", "WebKit", "-webkit.png"]];
+const DEFAULT_PAIR = ["ref", "safe"];
+// The compared pair: left is drawn underneath in swipe and onion skin, right on top.
+let pairA = DEFAULT_PAIR[0], pairB = DEFAULT_PAIR[1];
+const label = (k) => RENDERERS.find(([key]) => key === k)?.[1] ?? k;
+const isRenderer = (k) => RENDERERS.some(([key]) => key === k);
 const percent = (v, digits = 2) => (v * 100).toFixed(digits) + "%";
 const rows = [];
 for (const c of data.cases) {
@@ -99,16 +115,32 @@ for (const cl of data.clusters) {
   o.value = cl.signature; o.textContent = `${cl.count} · ${cl.signature}`;
   $("signature").append(o);
 }
+for (const id of ["left", "right"]) for (const [k, l] of RENDERERS) $(id).append(el("option", { value: k }, l));
+// The score the harness computed for a pair, in either order: PDFium against Safe-PDF (the
+// verdict's), or Safe-PDF against a context renderer. `null` when the harness did not score it.
+function pairScore(r, a, b) {
+  if (!r || !r.p) return null;
+  if ([a, b].sort().join("|") === "ref|safe") return r.mismatch == null ? null : { mismatch: r.mismatch, matches: null };
+  const other = a === "safe" ? b : b === "safe" ? a : null;
+  return (other && (r.p.context || []).find((sc) => sc.renderer === other)) || null;
+}
+function scoreText(sc) {
+  if (!sc) return "not scored by the harness";
+  if (sc.mismatch != null) return percent(sc.mismatch, 3) + (sc.matches ? " (agrees)" : "");
+  return "unavailable" + (sc.error ? ` (${sc.error})` : "");
+}
 function visible() {
   const st = $("status").value, dl = $("delta").value, sg = $("signature").value, cx = $("context").value, q = $("search").value.toLowerCase();
   const list = rows.filter((r) => (st === "all" || (st === "failing" ? failing(r.status) : r.status === st)) && (!dl || r.delta === dl) &&
     (!sg || r.signature === sg) && (!cx || r.outlier) && (!q || r.c.id.toLowerCase().includes(q)));
-  const val = (r) => sortKey === "id" ? r.c.id : sortKey === "status" ? r.status : (r.mismatch ?? -1);
+  const val = (r) => sortKey === "id" ? r.c.id : sortKey === "status" ? r.status : (pairScore(r, pairA, pairB)?.mismatch ?? -1);
   list.sort((a, b) => (val(a) < val(b) ? -1 : val(a) > val(b) ? 1 : 0) * (sortDesc ? -1 : 1));
   return list;
 }
 let current = [];
 function render() {
+  $("left").value = pairA; $("right").value = pairB;
+  $("mmhead").textContent = `${label(pairA)} ↔ ${label(pairB)}` + (sortKey === "mismatch" ? (sortDesc ? " ▾" : " ▴") : "");
   current = visible();
   selected = Math.min(selected, Math.max(0, current.length - 1));
   const tbody = $("rows"); tbody.textContent = "";
@@ -120,18 +152,24 @@ function render() {
     const st = document.createElement("td");
     st.innerHTML = `<span class="status ${r.status}">${r.status}</span><div class="delta ${r.delta}">${r.delta}</div>` +
       (r.outlier ? `<span class="outlier" title="pdf.js and WebKit agree with Safe-PDF">PDFium outlier</span>` : "");
-    const mm = document.createElement("td"); mm.textContent = r.mismatch == null ? "" : (r.mismatch * 100).toFixed(2) + "%";
+    const mm = document.createElement("td");
+    const score = pairScore(r, pairA, pairB)?.mismatch;
+    mm.textContent = score == null ? "" : (score * 100).toFixed(2) + "%";
     tr.append(id, st, mm); tr.onclick = () => { selected = i; render(); };
     tbody.append(tr);
   });
   showDetail(current[selected]);
   const sel = tbody.querySelector(".selected"); if (sel) sel.scrollIntoView({ block: "nearest" });
   const r = current[selected];
-  if (r) history.replaceState(null, "", `#case=${encodeURIComponent(r.c.id)}` + (r.p ? `&page=${r.p.page}` : ""));
+  const pair = pairA === DEFAULT_PAIR[0] && pairB === DEFAULT_PAIR[1] ? "" : `&a=${pairA}&b=${pairB}`;
+  if (r) history.replaceState(null, "", `#case=${encodeURIComponent(r.c.id)}` + (r.p ? `&page=${r.p.page}` : "") + pair);
 }
-// Links such as index.html#case=<id>&page=<n> (used by the GitHub issues) select that row.
+// Links such as index.html#case=<id>&page=<n>[&a=ref&b=pdfjs] (used by the GitHub issues) select
+// that row, and that pair of renderers when given.
 function selectFromHash() {
   const params = new URLSearchParams(location.hash.slice(1));
+  const a = params.get("a"), b = params.get("b");
+  if (isRenderer(a) && isRenderer(b) && a !== b) { pairA = a; pairB = b; }
   const id = params.get("case");
   if (!id) return;
   const page = params.get("page");
@@ -141,6 +179,13 @@ function selectFromHash() {
   selected = Math.max(0, visible().findIndex(matches));
 }
 function el(tag, attrs = {}, text) { const e = document.createElement(tag); Object.assign(e, attrs); if (text) e.textContent = text; return e; }
+// Two images stacked with a CSS difference blend: black where they agree. Needs no pixel reads, so
+// it works when the viewer is opened from disk.
+function blendStage(srcA, srcB) {
+  const s = el("div", { className: "stage" });
+  s.append(el("img", { src: srcA }), el("img", { src: srcB, className: "over blend" }));
+  return s;
+}
 function showDetail(r) {
   const d = $("detail"); d.textContent = "";
   if (!r) { d.append(el("div", { className: "empty" }, "No rows match.")); return; }
@@ -148,15 +193,12 @@ function showDetail(r) {
   d.append(el("h2", {}, r.c.id + (r.p ? ` · page ${r.p.page}` : "")));
   const info = el("div");
   info.innerHTML = `<span class="status ${r.status}">${r.status}</span> · baseline <span class="delta ${r.delta}">${r.delta}</span>` +
-    (r.mismatch != null ? ` · ${(r.mismatch * 100).toFixed(3)}% mismatched` : "");
+    (r.mismatch != null ? ` · ${(r.mismatch * 100).toFixed(3)}% mismatched against PDFium` : "");
   d.append(info);
   if (r.signature) { const s = el("div", { className: "sig" }); s.append(el("code", {}, r.signature)); d.append(s); }
   const scores = r.p && r.p.context ? r.p.context : [];
   if (scores.length) {
-    const line = scores.map((sc) => {
-      const label = CONTEXT.find(([k]) => k === sc.renderer)?.[1] ?? sc.renderer;
-      return sc.mismatch != null ? `${label} ${percent(sc.mismatch, 3)}${sc.matches ? " (agrees)" : ""}` : `${label} unavailable`;
-    }).join(" · ");
+    const line = scores.map((sc) => `${label(sc.renderer)} ${scoreText(sc)}`).join(" · ");
     d.append(el("div", { className: "sig" }, "Safe-PDF against " + line + (r.outlier ? " · PDFium may be the odd one out" : "")));
   }
   const links = el("div", { className: "links" });
@@ -168,38 +210,58 @@ function showDetail(r) {
   const rep = el("div"); rep.append("Reproduce: ", el("code", {}, r.p ? r.p.reproduce : r.c.reproduce)); d.append(rep);
   if (r.c.likely_crates.length) d.append(el("div", { className: "sig" }, "Likely crates: " + r.c.likely_crates.join(", ")));
   const pick = (suffix) => files.find((f) => f.endsWith(suffix));
-  const ref = pick("-ref.png"), safe = pick("-safe.png"), diff = pick("-diff.png");
-  const references = [["ref", "PDFium", ref], ...CONTEXT.map(([k, label]) => [k, label, pick(`-${k}.png`)])].filter(([, , f]) => f);
-  const chosen = references.find(([k]) => k === against) ?? references[0];
-  if (!ref && !safe) { d.append(el("div", { className: "empty" }, r.status === "pass" ? "Passing page: no images are kept." : "No images for this entry.")); return; }
+  const image = (k) => pick(RENDERERS.find(([key]) => key === k)[2]);
+  const available = RENDERERS.map(([k]) => k).filter(image);
+  if (!available.length) { d.append(el("div", { className: "empty" }, r.status === "pass" ? "Passing page: no images are kept." : "No images for this entry.")); return; }
+  // The chosen pair, or the nearest pair this page has images of.
+  const a = available.includes(pairA) ? pairA : available[0];
+  const b = available.includes(pairB) && pairB !== a ? pairB : available.find((k) => k !== a);
+  const missing = [pairA, pairB].filter((k) => !available.includes(k));
+  if (missing.length) d.append(el("div", { className: "sig" }, `No ${missing.map(label).join(" or ")} image for this page; showing ${label(a)}${b ? " vs " + label(b) : ""}.`));
+  const harnessDiff = b && [a, b].sort().join("|") === "ref|safe" ? pick("-diff.png") : null;
+  if (b) d.append(el("div", {}, `${label(a)} vs ${label(b)}: ${scoreText(pairScore(r, a, b))}`));
   const modes = el("div", { className: "modes" });
-  for (const [key, label] of [["side", "1 Side by side"], ["swipe", "2 Swipe"], ["onion", "3 Onion skin"], ["diff", "4 Diff"]]) {
-    const b = el("button", { className: mode === key ? "on" : "" }, label);
-    b.onclick = () => { mode = key; showDetail(r); };
-    modes.append(b);
-  }
-  if (references.length > 1 && (mode === "swipe" || mode === "onion")) {
-    const pickRef = el("select");
-    for (const [k, label] of references) pickRef.append(el("option", { value: k, selected: k === chosen[0] }, "Against " + label));
-    pickRef.onchange = () => { against = pickRef.value; showDetail(r); };
-    modes.append(pickRef);
+  for (const [key, text] of [["side", "1 Side by side"], ["swipe", "2 Swipe"], ["onion", "3 Onion skin"], ["diff", "4 Diff"]]) {
+    const btn = el("button", { className: mode === key ? "on" : "" }, text);
+    btn.onclick = () => { mode = key; showDetail(r); };
+    modes.append(btn);
   }
   d.append(modes);
-  if (mode === "side" || !ref || !safe) {
+  const caption = (k) => label(k) + (k === "ref" ? " (reference)" : "");
+  const figure = (child, cap) => { const fig = el("figure"); fig.append(child, el("figcaption", {}, cap)); return fig; };
+  const img = (f) => el("img", { src: base + f, loading: "lazy" });
+  if (mode === "side" || !b) {
     const pair = el("div", { className: "pair" });
-    const score = (k) => scores.find((sc) => sc.renderer === k);
-    const shown = [[ref, "PDFium (reference)"], [safe, "Safe-PDF"], [diff, "Diff against PDFium"],
-      ...CONTEXT.map(([k, label]) => [pick(`-${k}.png`), score(k)?.mismatch != null ? `${label} · ${percent(score(k).mismatch, 3)} from Safe-PDF` : label])];
-    for (const [f, cap] of shown) if (f) {
-      const fig = el("figure"); fig.append(el("img", { src: base + f, loading: "lazy" }), el("figcaption", {}, cap)); pair.append(fig);
+    pair.append(figure(img(image(a)), caption(a)));
+    if (b) {
+      pair.append(figure(img(image(b)), caption(b)));
+      pair.append(harnessDiff ? figure(img(harnessDiff), "Diff, PDFium against Safe-PDF")
+        : figure(blendStage(base + image(a), base + image(b)), "Visual difference (black = identical)"));
     }
     d.append(pair);
+    // Everything else this page has, so switching the pair never hides an image.
+    const rest = available.filter((k) => k !== a && k !== b);
+    const diff = pick("-diff.png");
+    if (rest.length || (diff && !harnessDiff)) {
+      const others = el("div", { className: "pair others" });
+      for (const k of rest) {
+        const sc = k === "safe" ? null : pairScore(r, k, "safe");
+        others.append(figure(img(image(k)), caption(k) + (sc?.mismatch != null ? ` · ${percent(sc.mismatch, 3)} from Safe-PDF` : "")));
+      }
+      if (diff && !harnessDiff) others.append(figure(img(diff), "Diff, PDFium against Safe-PDF"));
+      d.append(el("div", { className: "sig others" }, "Other renders"), others);
+    }
   } else if (mode === "diff") {
-    const s = el("div", { className: "stage" }); s.append(el("img", { src: base + diff })); d.append(s);
-    d.append(el("div", { className: "sig" }, "red: missing ink · blue: extra ink · magenta: hue · orange: shape · yellow: tolerated · hatched: annotations (not compared)"));
+    if (harnessDiff) {
+      const s = el("div", { className: "stage" }); s.append(el("img", { src: base + harnessDiff })); d.append(s);
+      d.append(el("div", { className: "sig" }, "red: missing ink · blue: extra ink · magenta: hue · orange: shape · yellow: tolerated · hatched: annotations (not compared)"));
+    } else {
+      d.append(el("div", { className: "sig" }, `${label(a)} − ${label(b)}: black = identical · bright = differs (a visual blend, not the harness's tolerant comparison)`),
+        blendStage(base + image(a), base + image(b)));
+    }
   } else {
     const s = el("div", { className: "stage" });
-    const under = el("img", { src: base + chosen[2] }), over = el("img", { src: base + safe, className: "over" });
+    const under = el("img", { src: base + image(a) }), over = el("img", { src: base + image(b), className: "over" });
     s.append(under, over);
     const slider = el("input", { type: "range", min: 0, max: 100, value: 50 });
     const apply = () => {
@@ -207,22 +269,27 @@ function showDetail(r) {
       else { over.style.clipPath = "none"; over.style.opacity = slider.value / 100; }
     };
     slider.oninput = apply; apply();
-    d.append(el("div", { className: "sig" }, mode === "swipe" ? `Left: ${chosen[1]} · right: Safe-PDF` : `Opacity of Safe-PDF over ${chosen[1]}`), slider, s);
+    d.append(el("div", { className: "sig" }, mode === "swipe" ? `Left: ${label(a)} · right: ${label(b)}` : `Opacity of ${label(b)} over ${label(a)}`), slider, s);
   }
   for (const f of files.filter((f) => /-region\d+\.png$/.test(f))) {
     const fig = el("figure", { className: "pair" }); fig.append(el("img", { src: base + f, loading: "lazy" }));
     d.append(el("div", { className: "sig" }, f + " (PDFium | Safe-PDF)"), fig);
   }
 }
+function swap() { [pairA, pairB] = [pairB, pairA]; render(); }
+$("left").onchange = () => { pairA = $("left").value; if (pairA === pairB) pairB = RENDERERS.find(([k]) => k !== pairA)[0]; render(); };
+$("right").onchange = () => { pairB = $("right").value; if (pairA === pairB) pairA = RENDERERS.find(([k]) => k !== pairB)[0]; render(); };
+$("swap").onclick = swap;
 for (const id of ["status", "delta", "signature", "context"]) $(id).onchange = () => { selected = 0; render(); };
 $("search").oninput = () => { selected = 0; render(); };
 document.querySelectorAll("th[data-sort]").forEach((th) => th.onclick = () => {
   const key = th.dataset.sort; sortDesc = key === sortKey ? !sortDesc : key === "mismatch"; sortKey = key; render();
 });
 document.addEventListener("keydown", (e) => {
-  if (e.target.tagName === "INPUT" && e.target.type !== "range") return;
+  if ((e.target.tagName === "INPUT" && e.target.type !== "range") || e.target.tagName === "SELECT") return;
   if (e.key === "j") { selected = Math.min(selected + 1, current.length - 1); render(); }
   else if (e.key === "k") { selected = Math.max(selected - 1, 0); render(); }
+  else if (e.key === "s") swap();
   else if (["1", "2", "3", "4"].includes(e.key)) { mode = ["side", "swipe", "onion", "diff"][Number(e.key) - 1]; showDetail(current[selected]); }
 });
 selectFromHash();
