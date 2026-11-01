@@ -62,6 +62,15 @@ impl BodyContext {
         }
     }
 
+    /// Returns true when `body` links to the current published report of every corpus in
+    /// `group`, so it needs no rewrite for its links alone.
+    pub fn links_current(&self, group: &Group<'_>, body: &str) -> bool {
+        group
+            .parts
+            .iter()
+            .all(|part| body.contains(&self.pages(part.run.kind)))
+    }
+
     /// Returns ` in <run link>` for comments, or nothing outside Actions.
     pub fn in_run(&self) -> String {
         self.run_link

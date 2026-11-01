@@ -336,8 +336,9 @@ PDFs that have no goldens.
     with a JSON block for agents.
   - A hidden `conformance-state` comment holds the issue's key and, per corpus, its cluster
     size and how many full runs in a row it was absent:
-    - **Open:** the body is refreshed silently. A comment is posted only when new documents
-      join the cluster or it shrinks by a quarter or more.
+    - **Open:** the body is rewritten silently when the cluster changes or when its links
+      point to another Pages location (as after the move from Safe-PDF's Pages). A comment is
+      posted only when new documents join the cluster or it shrinks by a quarter or more.
     - **Absent from two full runs in a row:** closed as completed.
     - **Closed as completed:** reopened if the failure comes back.
     - **Closed as not planned:** never touched again.

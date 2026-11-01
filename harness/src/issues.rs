@@ -418,7 +418,7 @@ impl Sync<'_> {
             self.write(group, issue, &state)?;
             return self.reopen(issue);
         }
-        if state == *old {
+        if state == *old && self.context.links_current(group, &issue.body) {
             return Ok(());
         }
         self.tally.updated = self.tally.updated.saturating_add(1);
