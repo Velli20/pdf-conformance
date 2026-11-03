@@ -22,6 +22,11 @@ inputs:
     default: "true"
 
 outputs:
+  cache-paths:
+    description: >
+      Paths of the cargo cache. A save step must pass exactly these, or its entry gets another
+      version and the restore here never finds it.
+    value: ${{ steps.cache-paths.outputs.paths }}
   cache-primary-key:
     description: Key to save the cargo cache under.
     value: ${{ steps.cargo-cache.outputs.cache-primary-key }}
@@ -32,6 +37,23 @@ outputs:
 runs:
   using: composite
   steps:
+    # Paths a job does not build are skipped when saving.
+    - name: Cargo cache paths
+      id: cache-paths
+      shell: bash
+      run: |
+        {
+          echo "paths<<EOF"
+          echo "~/.cargo/registry"
+          echo "~/.cargo/git"
+          echo "~/.cargo/bin/wasm-bindgen"
+          echo "target/debug"
+          echo "target/regression"
+          echo "safe-pdf/target/release"
+          echo "safe-pdf/target/wasm32-unknown-unknown"
+          echo "EOF"
+        } >> "$GITHUB_OUTPUT"
+
     - name: Check out Safe-PDF
       uses: actions/checkout@v4
       with:
@@ -55,13 +77,7 @@ runs:
       id: cargo-cache
       uses: actions/cache/restore@v4
       with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-          ~/.cargo/bin/wasm-bindgen
-          target/regression
-          safe-pdf/target/release
-          safe-pdf/target/wasm32-unknown-unknown
+        path: ${{ steps.cache-paths.outputs.paths }}
         key: ${{ runner.os }}-${{ inputs.cache-key }}-${{ hashFiles('Cargo.lock', 'safe-pdf/Cargo.lock') }}
         restore-keys: |
           ${{ runner.os }}-${{ inputs.cache-key }}-
