@@ -6,7 +6,7 @@ use anyhow::{Context, Result, anyhow};
 use serde::de::DeserializeOwned;
 use std::{
     fs,
-    io::Read,
+    io::{BufRead, BufReader, Read},
     process::{Child, Command, Output, Stdio},
     thread,
     time::{Duration, Instant},
@@ -14,6 +14,10 @@ use std::{
 
 /// Prefix of the stderr lines workers print when entering a stage.
 pub const STAGE_MARKER: &str = "conformance-stage: ";
+
+/// Separates a stage name from the milliseconds after launch at which the harness read the
+/// stage line, as in `conformance-stage: pdfjs-render +652ms`.
+const STAGE_TIME_SEPARATOR: &str = " +";
 
 /// Prefix of the stderr lines carrying a JSON [`RenderStats`] update from a page worker.
 pub const STATS_MARKER: &str = "conformance-stats: ";
@@ -83,7 +87,12 @@ pub fn execute<T: DeserializeOwned>(
             .lines()
             .rev()
             .find_map(|line| line.strip_prefix(STAGE_MARKER))
-            .map(str::to_owned),
+            .map(|stage| {
+                stage
+                    .split_once(STAGE_TIME_SEPARATOR)
+                    .map_or(stage, |(name, _)| name)
+                    .to_owned()
+            }),
         render: render_stats(&stderr),
         stderr: tail(&stderr, STDERR_LIMIT),
         stdout: None,
@@ -166,12 +175,27 @@ fn limited_output(mut command: Command, limits: Limits) -> Result<(Output, Stop)
         stdout.read_to_end(&mut bytes)?;
         Ok::<_, std::io::Error>(bytes)
     });
+    let start = Instant::now();
     let stderr_reader = thread::spawn(move || {
+        // Stage lines get the time they arrived, so a timeout shows how long each stage took.
+        let mut reader = BufReader::new(&mut stderr);
         let mut bytes = Vec::new();
-        stderr.read_to_end(&mut bytes)?;
+        let mut line = Vec::new();
+        while reader.read_until(b'\n', &mut line)? > 0 {
+            match line.strip_suffix(b"\n") {
+                Some(text) if text.starts_with(STAGE_MARKER.as_bytes()) => {
+                    bytes.extend_from_slice(text);
+                    let elapsed = start.elapsed().as_millis();
+                    bytes.extend_from_slice(
+                        format!("{STAGE_TIME_SEPARATOR}{elapsed}ms\n").as_bytes(),
+                    );
+                }
+                _ => bytes.extend_from_slice(&line),
+            }
+            line.clear();
+        }
         Ok::<_, std::io::Error>(bytes)
     });
-    let start = Instant::now();
     let mut stop = Stop::Finished;
     loop {
         if child.try_wait()?.is_some() {
