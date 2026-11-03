@@ -10,10 +10,14 @@ reports=${1:?usage: stage-pages.sh <reports> <site>}
 site=${2:?usage: stage-pages.sh <reports> <site>}
 mkdir -p "$site"
 items=""
-# The PDFium corpus is rendered by both renderers; the pdf.js corpus is only read.
-for artifact in conformance-pdfium reads-pdfjs conformance-pdfium-web; do
+# Both corpora are rendered by both renderers. Without a pdf.js render, its read-only report is
+# published instead.
+for artifact in conformance-pdfium conformance-pdfjs conformance-pdfium-web conformance-pdfjs-web; do
   report=${artifact#*-}
   src="$reports/$artifact"
+  if [ "$artifact" = conformance-pdfjs ] && [ ! -f "$src/index.html" ]; then
+    src="$reports/reads-pdfjs"
+  fi
   if [ ! -f "$src/index.html" ]; then
     items="$items<li>$report: no report in this run</li>"
     continue
@@ -47,7 +51,7 @@ cat > "$site/index.html" <<HTML
 </head>
 <body>
 <h1>Safe-PDF conformance</h1>
-<p>Safe-PDF compared with PDFium, with pdf.js and WebKit shown next to failing pages. <code>pdfium</code> and <code>pdfjs</code> render page content without annotations or form fields; <code>pdfium-web</code> renders the browser stack with its annotation layer, compared with PDFium's render of annotations and form fields.</p>
+<p>Safe-PDF compared with PDFium, with pdf.js and WebKit shown next to failing pages. <code>pdfium</code> and <code>pdfjs</code> render page content without annotations or form fields; <code>pdfium-web</code> and <code>pdfjs-web</code> render the browser stack with its annotation layer, compared with PDFium's render of annotations and form fields.</p>
 <ul>$items</ul>
 <p>Safe-PDF <a href="$commit_url">${SAFE_SHA::7}</a> · <a href="${RUN_URL:?}">workflow run</a> · $(date -u '+%Y-%m-%d %H:%M UTC')</p>
 <p><a href="https://${owner}.github.io/${SAFE_PDF_REPOSITORY#*/}/">Safe-PDF web viewer</a></p>
