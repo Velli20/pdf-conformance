@@ -13,7 +13,7 @@ use pdf_graphics::{
     BlendMode, Image, PathFillType, color::Color, pdf_path::PathVerb, rect::Rect,
     transform::Transform,
 };
-use pdf_shading::paint::ShadingPaint;
+use pdf_shading::paint::ShadingSource;
 
 /// Records drawing calls without rasterizing them.
 pub struct TraceBackend {
@@ -134,11 +134,12 @@ fn hex(color: Color) -> String {
 fn paint(color: Color, shader: Option<&Shader>, blend_mode: Option<BlendMode>) -> String {
     let mut text = match shader {
         None => hex(color),
-        Some(Shader::Shading(ShadingPaint::LinearGradient { .. })) => "axial shading".to_owned(),
-        Some(Shader::Shading(ShadingPaint::RadialGradient { .. })) => "radial shading".to_owned(),
-        Some(Shader::Shading(ShadingPaint::RasterImage { .. })) => {
-            "rasterized shading (function or mesh)".to_owned()
+        Some(Shader::Shading(paint)) => match &paint.source {
+            ShadingSource::LinearGradient { .. } => "axial shading",
+            ShadingSource::RadialGradient { .. } => "radial shading",
+            ShadingSource::RasterImage(_) => "rasterized shading (function or mesh)",
         }
+        .to_owned(),
         Some(Shader::TilingPatternImage(_)) => "tiling pattern".to_owned(),
     };
     if let Some(mode) = blend_mode {
